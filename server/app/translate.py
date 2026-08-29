@@ -104,3 +104,60 @@ def translate(text: str, context: list[str] | None = None,
     stats["total_ms"] += ms
     _cache.put(key, out)
     return {"translation": out, "cached": False, "ms": round(ms, 1), "provider": used}
+
+
+# ---------------------------------------------------------------------------
+# Per-speaker summary
+# ---------------------------------------------------------------------------
+
+SUMMARY_SYSTEM = """\
+You summarise one person's contributions to a live meeting, in {target}.
+
+You are given everything that ONE speaker said, in order, transcribed automatically.
+Expect fragments, false starts and recognition errors — read through them.
+
+Write for a reader who was present but could not follow the spoken {source}. They
+need to know what this person actually contributed, quickly.
+
+Structure:
+1. Two or three sentences on their main point or position overall.
+2. A short bullet list of the specific things they said that matter: decisions,
+   commitments, questions they asked, problems they raised, numbers or dates.
+3. If they asked something that was not obviously answered, note it under a final
+   line beginning "Open:".
+
+Rules:
+- Write in {target}. Do not include the original {source}.
+- Only what they actually said. Do not infer, do not add advice, do not invent
+  detail to fill gaps.
+- Keep technical terms in English: {glossary}
+- Keep names, numbers, dates and code identifiers unchanged.
+- If the input is too short or too garbled to summarise, say exactly that in
+  {target} rather than producing something plausible.
+"""
+
+
+def summarize_speaker(speaker: str, segments: list[str],
+                      provider: str | None = None) -> dict:
+    """
+    Summarise everything one speaker said.
+
+    Deliberately not cached: the transcript grows through the meeting, so the same
+    speaker summarised twice is a different question with a different answer.
+    """
+    lines = [s.strip() for s in segments if s and s.strip()]
+    if not lines:
+        return {"summary": "", "segments": 0, "ms": 0.0,
+                "provider": provider or settings.provider}
+
+    system = SUMMARY_SYSTEM.format(
+        target=settings.target_lang_name,
+        source=settings.source_lang_name,
+        glossary=settings.glossary,
+    )
+    body = "\n".join(f"- {l}" for l in lines)
+    user = f"Everything {speaker or 'this speaker'} said, in order:\n{body}"
+
+    out, ms, used = call(system, user, provider)
+    return {"summary": out, "segments": len(lines),
+            "ms": round(ms, 1), "provider": used}

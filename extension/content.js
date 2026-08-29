@@ -53,6 +53,42 @@
    *  "he"/"it"/"that", not summarising the meeting. */
   const recent = [];
 
+  /**
+   * Everything each speaker said, in order. Feeds the per-speaker summary.
+   * English is stored, not the translation: summarising a translation compounds
+   * whatever the translator got wrong.
+   */
+  const bySpeaker = new Map();   // speaker -> [text, ...]
+
+  /**
+   * Speaker colours.
+   *
+   * Derived from a hash of the name rather than assigned randomly, so the same
+   * person keeps the same colour for the whole meeting, across a page reload, and
+   * on everyone's screen. Random assignment would also occasionally pick two
+   * near-identical colours for the two people talking most.
+   *
+   * The palette is hand-picked for legibility on the dark panel; generating hues
+   * arbitrarily produces some that are unreadable against it.
+   */
+  const PALETTE = [
+    "#60a5fa", "#f87171", "#34d399", "#fbbf24", "#c084fc",
+    "#22d3ee", "#fb923c", "#a3e635", "#f472b6", "#94a3b8",
+  ];
+  const colorCache = new Map();
+  function colorFor(name) {
+    const key = (name || "").trim() || "unknown";
+    if (!colorCache.has(key)) {
+      let h = 0;
+      for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+      colorCache.set(key, PALETTE[h % PALETTE.length]);
+    }
+    return colorCache.get(key);
+  }
+
+  /** "" means show everyone. */
+  let speakerFilter = "";
+
   // Ordered by how much we trust them. Attribute/data hooks survive CSS churn
   // better than generated class names.
   // Confirmed against Teams web on 2026-08-29: caption text lives in
@@ -98,7 +134,7 @@
   // stylesheet made the panel render invisibly at the bottom of the page flow —
   // a silent failure that cost an afternoon. One file, one thing to go wrong.
   const style = document.createElement("style");
-  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n";
+  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -124,16 +160,33 @@
   const panel = el("div", { id: "mct-panel" }, [
     el("div", { id: "mct-head" }, [
       el("span", { id: "mct-dot" }),
-      el("span", { text: "Caption capture" }),
+      el("span", { id: "mct-tab-live",  cls: "mct-tab on", text: "Live" }),
+      el("span", { id: "mct-tab-sum",   cls: "mct-tab",    text: "Summary" }),
       el("span", { cls: "sp" }),
-      el("button", { id: "mct-pick", text: "pick area" }),
-      el("button", { id: "mct-diag", text: "find text" }),
+      el("button", { id: "mct-pick",  text: "pick" }),
+      el("button", { id: "mct-diag",  text: "find" }),
+      el("button", { id: "mct-dump",  text: "dump" }),
       el("button", { id: "mct-retry", text: "reconnect" }),
-      el("button", { id: "mct-dump", text: "dump" }),
-      el("button", { id: "mct-copy", text: "copy" }),
-      el("button", { id: "mct-hide", text: "\u2013" }),
+      el("button", { id: "mct-copy",  text: "copy" }),
+      el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
+      el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
     ]),
+
+    // Speaker chips: colour key, and the filter control. Clicking one shows only
+    // that person; "All" restores the full conversation.
+    el("div", { id: "mct-speakers" }),
+
     el("div", { id: "mct-log" }),
+
+    // Summary view, hidden until its tab is selected.
+    el("div", { id: "mct-summary" }, [
+      el("div", { cls: "mct-srow" }, [
+        el("select", { id: "mct-sum-who" }),
+        el("button", { id: "mct-sum-go", text: "Summarise" }),
+      ]),
+      el("div", { id: "mct-sum-out", cls: "mct-sum-out" }),
+    ]),
+
     el("div", { id: "mct-meta", cls: "mct-meta", text: "looking for captions\u2026" }),
   ]);
   function mountPanel() {
@@ -152,7 +205,11 @@
 
   const $log  = panel.querySelector("#mct-log");
   const $meta = panel.querySelector("#mct-meta");
-  const $dot  = panel.querySelector("#mct-dot");
+  const $dot   = panel.querySelector("#mct-dot");
+  const $chips = panel.querySelector("#mct-speakers");
+  const $sum   = panel.querySelector("#mct-summary");
+  const $sumWho = panel.querySelector("#mct-sum-who");
+  const $sumOut = panel.querySelector("#mct-sum-out");
 
   const transcript = [];   // in memory only; nothing is persisted
 
@@ -188,11 +245,73 @@
       $log.appendChild(row);
       while ($log.children.length > MAX_ROWS) $log.firstChild.remove();
     }
-    row.querySelector(".mct-spk").textContent = speaker || "";
+    const spk = row.querySelector(".mct-spk");
+    spk.textContent = speaker || "";
+    spk.style.color = colorFor(speaker);
+    row.dataset.spk = speaker || "";
+    // A row created while a filter is active must respect it immediately, or the
+    // filtered view silently gains rows as people keep talking.
+    row.style.display = (!speakerFilter || speakerFilter === speaker) ? "" : "none";
     const t = row.querySelector(".mct-txt");
     t.textContent = text;
     t.className = "mct-txt" + (final ? "" : " mct-live");
     $log.scrollTop = $log.scrollHeight;
+  }
+
+  /** Chips double as the colour key and the filter control. */
+  function renderChips() {
+    $chips.textContent = "";
+    const names = [...bySpeaker.keys()].filter(Boolean);
+    if (!names.length) return;
+
+    const all = el("span", {
+      cls: "mct-chip" + (speakerFilter ? "" : " on"),
+      text: `All (${names.length})`,
+    });
+    all.onclick = () => setFilter("");
+    $chips.appendChild(all);
+
+    for (const n of names) {
+      const c = el("span", {
+        cls: "mct-chip" + (speakerFilter === n ? " on" : ""),
+        text: `${n} (${bySpeaker.get(n).length})`,
+      });
+      c.style.color = colorFor(n);
+      c.style.borderColor = colorFor(n);
+      c.onclick = () => setFilter(speakerFilter === n ? "" : n);
+      $chips.appendChild(c);
+    }
+  }
+
+  function setFilter(name) {
+    speakerFilter = name;
+    for (const row of $log.querySelectorAll(".mct-seg")) {
+      row.style.display = (!name || row.dataset.spk === name) ? "" : "none";
+    }
+    renderChips();
+    meta(name ? `showing only ${name}` : "showing everyone");
+    $log.scrollTop = $log.scrollHeight;
+  }
+
+  /** Record what a speaker said, and keep the chips and dropdown in step. */
+  function remember(speaker, text, revised) {
+    const who = speaker || "";
+    if (!bySpeaker.has(who)) bySpeaker.set(who, []);
+    const arr = bySpeaker.get(who);
+    if (revised && arr.length) arr[arr.length - 1] = text;
+    else arr.push(text);
+    renderChips();
+    syncSpeakerOptions();
+  }
+
+  function syncSpeakerOptions() {
+    const names = [...bySpeaker.keys()].filter(Boolean);
+    const chosen = $sumWho.value;
+    $sumWho.textContent = "";
+    for (const n of names) {
+      $sumWho.appendChild(el("option", { value: n, text: `${n} (${bySpeaker.get(n).length})` }));
+    }
+    if (names.includes(chosen)) $sumWho.value = chosen;
   }
 
   function renderTranslation(key, text, error = "", latency = "") {
@@ -221,6 +340,8 @@
     // Context is the English history, not the translations.
     if (!revised) { recent.push(text); while (recent.length > 10) recent.shift(); }
     else if (recent.length) recent[recent.length - 1] = text;
+
+    remember(speaker, text, revised);
 
     requestTranslation(key, speaker, text);
     const mins = Math.max((Date.now() - state.started) / 60000, 0.01);
@@ -583,6 +704,68 @@
 
   /** Print the attached container's structure so selectors can be tuned against
    *  what Teams actually renders, instead of guesses. */
+  // ---- tabs ---------------------------------------------------------------
+  const $tabLive = panel.querySelector("#mct-tab-live");
+  const $tabSum  = panel.querySelector("#mct-tab-sum");
+
+  function showTab(which) {
+    const live = which === "live";
+    $tabLive.classList.toggle("on", live);
+    $tabSum.classList.toggle("on", !live);
+    $log.style.display    = live ? "" : "none";
+    $chips.style.display  = live ? "" : "none";
+    $sum.style.display    = live ? "none" : "";
+    if (!live) syncSpeakerOptions();
+  }
+  $tabLive.onclick = () => showTab("live");
+  $tabSum.onclick  = () => showTab("summary");
+  showTab("live");
+
+  // ---- maximise / restore --------------------------------------------------
+  // The default panel is small so it does not cover the meeting. Following a
+  // conversation you cannot hear needs more room than glancing at it does, so this
+  // toggles rather than picking one size for both jobs.
+  let maximised = false;
+  panel.querySelector("#mct-max").onclick = () => {
+    maximised = !maximised;
+    panel.classList.toggle("max", maximised);
+    if (maximised) { panel.style.left = ""; panel.style.top = ""; }
+    $log.scrollTop = $log.scrollHeight;
+  };
+
+  // ---- summary -------------------------------------------------------------
+  panel.querySelector("#mct-sum-go").onclick = async () => {
+    const who = $sumWho.value;
+    const segments = bySpeaker.get(who) || [];
+    if (!who || !segments.length) { $sumOut.textContent = "Nothing recorded for that speaker yet."; return; }
+    if (!server.ok) { $sumOut.textContent = "Translator offline — start the local service."; return; }
+
+    $sumOut.className = "mct-sum-out";
+    $sumOut.textContent = `Summarising ${segments.length} segments from ${who}…`;
+    try {
+      const r = await fetch(`${SERVER}/summarize`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ speaker: who, segments }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      if (d.error) {
+        $sumOut.className = "mct-sum-out err";
+        $sumOut.textContent = d.error;
+        return;
+      }
+      // Summaries are long-form prose; RTL matters even more here than for a
+      // single caption line.
+      $sumOut.className = "mct-sum-out" + (server.rtl ? " rtl" : "");
+      $sumOut.textContent = d.summary;
+      meta(`summarised ${d.segments} segments · ${Math.round(d.ms)}ms`);
+    } catch (e) {
+      $sumOut.className = "mct-sum-out err";
+      $sumOut.textContent = `Could not reach the translator at ${SERVER}`;
+    }
+  };
+
   panel.querySelector("#mct-retry").onclick = () => {
     meta("reconnecting to translator…");
     loadConfig();

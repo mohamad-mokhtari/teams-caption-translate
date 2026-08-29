@@ -98,3 +98,37 @@ switching (Ollama / OpenAI / Anthropic) is Python we already know, and latency a
 measurable in one place.
 
 Not built yet — phase 0 has to pass first.
+
+
+---
+
+## Panel features
+
+| Control | Does |
+|---|---|
+| **Live / Summary** tabs | Running captions, or a per-speaker summary |
+| **⤡** | Maximise / restore. Drag the bottom-right corner for any size in between |
+| **–** | Collapse to the title bar |
+| Speaker chips | Colour key **and** filter — click a name to see only that person, **All** to go back |
+| **pick / find / dump** | Attach manually if auto-detect fails; `dump` prints the caption markup |
+| **reconnect** | Re-check the local translation service |
+| **copy** | Whole transcript to the clipboard |
+
+### Speaker colours
+
+Derived from a hash of the name, not assigned randomly — so the same person keeps the
+same colour for the whole meeting, across a reload, and on everyone's screen. The
+palette is hand-picked for legibility on the dark panel; arbitrary hues produce some
+that cannot be read against it.
+
+### Per-speaker summary
+
+Pick a speaker, press **Summarise**, and their whole contribution so far is sent to
+the local service and comes back as a structured summary in your language: their
+overall position, a bullet list of specifics (decisions, numbers, commitments,
+questions), and anything they asked that was left unanswered under `Open:`.
+
+It summarises the **English** transcript rather than the translations — summarising a
+translation compounds whatever the translator got wrong. It is user-triggered, never
+automatic: it reads the whole transcript for that person and costs meaningfully more
+than one caption line.

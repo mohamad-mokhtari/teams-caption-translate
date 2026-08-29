@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .providers import ProviderError
-from .translate import stats, translate
+from .translate import stats, summarize_speaker, translate
 
 app = FastAPI(title="Caption Translator", version="1.0.0")
 
@@ -119,3 +119,34 @@ async def do_translate(req: TranslateIn):
             provider=req.provider or settings.provider,
             key=req.key, error=str(e),
         )
+
+
+class SummaryIn(BaseModel):
+    speaker: str = ""
+    segments: list[str] = Field(default_factory=list,
+                                description="Everything this speaker said, in order")
+    provider: str | None = None
+
+
+class SummaryOut(BaseModel):
+    summary: str
+    segments: int
+    ms: float
+    provider: str
+    error: str | None = None
+
+
+@app.post("/summarize", response_model=SummaryOut)
+async def do_summarize(req: SummaryIn):
+    """
+    Summarise one speaker's contributions.
+
+    Slower and more expensive than a translation — it reads the whole transcript for
+    that person — so it is user-triggered, never automatic.
+    """
+    try:
+        return SummaryOut(**summarize_speaker(req.speaker, req.segments, req.provider))
+    except ProviderError as e:
+        stats["errors"] += 1
+        return SummaryOut(summary="", segments=len(req.segments), ms=0.0,
+                          provider=req.provider or settings.provider, error=str(e))
