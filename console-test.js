@@ -491,18 +491,53 @@
   }
   window.__mctFindByText = findByText;
 
-  // Teams mounts captions only after they are switched on, so keep looking.
+  /**
+   * Keep looking, indefinitely.
+   *
+   * The previous version gave up after 120 tries (~2 minutes) and said so in the
+   * footer. In practice a meeting starts, captions get switched on, people get
+   * settled — and two minutes are gone before anyone speaks. The search had already
+   * quit, so nothing was ever captured and the only way back was the manual picker.
+   *
+   * There is no reason to stop: the poll is a single querySelectorAll against a
+   * page that is doing far heavier work anyway. It just slows down after the first
+   * minute so an idle tab is not scanning every second all day.
+   *
+   * It also re-attaches. Teams re-renders large parts of the DOM — leaving a call,
+   * rejoining, toggling captions off and on — and the element we were observing can
+   * be detached without warning. Watching a node that is no longer in the document
+   * fails silently, which looks exactly like "captions stopped working".
+   */
   let tries = 0;
-  const hunt = setInterval(() => {
-    if (state.container) { clearInterval(hunt); return; }
-    if (autoFind()) { clearInterval(hunt); return; }
-    if (++tries % 5 === 0) {
+  setInterval(() => {
+    tries++;
+
+    if (state.container) {
+      // Still attached to something that is still in the page and still holds
+      // captions? Then there is nothing to do.
+      const alive = state.container.isConnected &&
+                    (state.container.querySelector(TEXT_SEL) ||
+                     deepQueryAll(TEXT_SEL, state.container).length ||
+                     state.pending.size);
+      if (alive) return;
+      console.log("[caption] container went stale — re-attaching");
+      meta("caption panel changed — re-attaching…");
+      state.container = null;
+      if (state.observer) state.observer.disconnect();
+    }
+
+    if (autoFind()) return;
+
+    // After the first minute, only scan every third tick — captions are usually
+    // on within seconds of someone speaking, and an idle tab should stay idle.
+    if (tries > 60 && tries % 3 !== 0) return;
+
+    if (tries % 5 === 0) {
       const seen = deepQueryAll(TEXT_SEL).length;
       meta(seen
         ? `found ${seen} caption node(s) but could not attach — try "find text"`
-        : `searching… (${tries}) no [data-tid="closed-caption-text"] yet — are live captions on?`);
+        : `waiting for captions… turn on live captions in Teams`);
     }
-    if (tries > 120) { clearInterval(hunt); meta('gave up searching — use "pick area"'); }
   }, 1000);
 
   // ---------- manual picker (the fallback that makes this robust) ----------
