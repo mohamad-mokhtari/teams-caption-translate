@@ -136,7 +136,7 @@
   // stylesheet made the panel render invisibly at the bottom of the page flow —
   // a silent failure that cost an afternoon. One file, one thing to go wrong.
   const style = document.createElement("style");
-  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n\n\n/* --- layout ---------------------------------------------------------------\n   The panel is a flex column. Without an explicit flex on the scrolling areas,\n   the browser sizes them from content: the log stops growing into the space it\n   has, and the chip row gets clipped mid-row so the bottom line of chips is cut\n   in half. min-height:0 is required for a flex child to be allowed to shrink\n   below its content size and scroll instead of overflowing. */\n#mct-log      { flex: 1 1 auto; min-height: 0; }\n#mct-summary  { flex: 1 1 auto; min-height: 0; flex-direction: column; }\n#mct-head     { flex: 0 0 auto; flex-wrap: wrap; }\n.mct-meta     { flex: 0 0 auto; }\n\n/* Chips wrap freely rather than scrolling inside a fixed height \u2014 a scrollable\n   box cut rows in half, which is what looked broken. */\n#mct-speakers {\n  flex: 0 0 auto;\n  max-height: none;\n  overflow: visible;\n  padding-bottom: 6px;\n}\n.mct-chip { line-height: 1.5; }\n";
+  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n\n\n/* --- layout ---------------------------------------------------------------\n   The panel is a flex column. Without an explicit flex on the scrolling areas,\n   the browser sizes them from content: the log stops growing into the space it\n   has, and the chip row gets clipped mid-row so the bottom line of chips is cut\n   in half. min-height:0 is required for a flex child to be allowed to shrink\n   below its content size and scroll instead of overflowing. */\n#mct-log      { flex: 1 1 auto; min-height: 0; }\n#mct-summary  { flex: 1 1 auto; min-height: 0; flex-direction: column; }\n#mct-head     { flex: 0 0 auto; flex-wrap: wrap; }\n.mct-meta     { flex: 0 0 auto; }\n\n/* Chips wrap freely rather than scrolling inside a fixed height \u2014 a scrollable\n   box cut rows in half, which is what looked broken. */\n#mct-speakers {\n  flex: 0 0 auto;\n  max-height: none;\n  overflow: visible;\n  padding-bottom: 6px;\n}\n.mct-chip { line-height: 1.5; }\n\n\n/* Launcher pill, shown while the panel is closed. Deliberately small and dim: it\n   is a way back in, not something to look at during a meeting. */\n#mct-launcher {\n  position: fixed; right: 16px; bottom: 16px;\n  display: none;\n  background: #14161c; color: #9096a3;\n  border: 1px solid #2a2f3a; border-radius: 20px;\n  padding: .3rem .8rem;\n  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; z-index: 2147483647;\n  box-shadow: 0 4px 14px rgba(0,0,0,.35);\n}\n#mct-launcher:hover { color: #e8e8ea; border-color: #3b4252; }\n\n#mct-close { color: #f87171; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -172,6 +172,7 @@
       el("button", { id: "mct-copy",  text: "copy" }),
       el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
+      el("button", { id: "mct-close", text: "\u00d7", title: "close" }),
     ]),
 
     // Speaker chips: colour key, and the filter control. Clicking one shows only
@@ -191,15 +192,46 @@
 
     el("div", { id: "mct-meta", cls: "mct-meta", text: "looking for captions\u2026" }),
   ]);
+  /**
+   * Small pill shown while the panel is closed.
+   *
+   * Without it, closing the panel would be a one-way door: the only way back would
+   * be reloading the page, which also throws away the transcript. It doubles as the
+   * way in when auto-detect has not found captions yet and you need "find".
+   */
+  const launcher = el("div", { id: "mct-launcher", text: "\u25cf captions" });
+  launcher.onclick = () => setPanelOpen(true, /*byUser=*/true);
+
+  /**
+   * Open and close only ever toggle visibility — the panel is never removed and its
+   * rows are never cleared. Closing and reopening therefore keeps the whole
+   * conversation, which is the point: people close it to see the meeting, not to
+   * discard what was said.
+   */
+  let panelOpen = false;
+  let userClosed = false;      // an explicit close must not be undone by the poller
+
+  function setPanelOpen(open, byUser = false) {
+    panelOpen = open;
+    if (byUser) userClosed = !open;
+    panel.style.display    = open ? "flex" : "none";
+    launcher.style.display = open ? "none" : "block";
+    if (open) $log.scrollTop = $log.scrollHeight;
+  }
+
   function mountPanel() {
     if (!IS_TOP) return;
     const host = document.body || document.documentElement;
     if (!host) { setTimeout(mountPanel, 300); return; }
     if (!panel.isConnected) host.appendChild(panel);
+    if (!launcher.isConnected) host.appendChild(launcher);
+    setPanelOpen(false);          // stays closed until captions appear
     // Teams is a single-page app and re-renders large parts of the DOM; if it
     // removes our node, put it back.
     setInterval(() => {
-      if (!panel.isConnected) (document.body || document.documentElement).appendChild(panel);
+      const host2 = document.body || document.documentElement;
+      if (!panel.isConnected) host2.appendChild(panel);
+      if (!launcher.isConnected) host2.appendChild(launcher);
     }, 3000);
     console.log("[caption] panel mounted");
   }
@@ -636,6 +668,24 @@
   setInterval(() => {
     tries++;
 
+    // Are captions on screen right now?
+    const captionsOn = deepQueryAll(TEXT_SEL).some(e => !isOurs(e));
+
+    if (captionsOn) {
+      // Turning captions on reopens the panel — unless it was closed by hand,
+      // in which case leave it closed and let the launcher pill offer the way back.
+      if (!panelOpen && !userClosed) setPanelOpen(true);
+    } else if (panelOpen) {
+      // Captions switched off: put the panel away, but keep everything it holds.
+      setPanelOpen(false);
+      // An explicit close applies to this caption session only. Once captions go
+      // away, the next time they come on the panel should open again — otherwise
+      // closing it once silently disables the tool for the rest of the day.
+      userClosed = false;
+    } else {
+      userClosed = false;
+    }
+
     if (state.container) {
       // Still attached to something that is still in the page and still holds
       // captions? Then there is nothing to do.
@@ -779,6 +829,8 @@
       $sumOut.textContent = `Could not reach the translator at ${SERVER}`;
     }
   };
+
+  panel.querySelector("#mct-close").onclick = () => setPanelOpen(false, /*byUser=*/true);
 
   panel.querySelector("#mct-retry").onclick = () => {
     meta("reconnecting to translator…");

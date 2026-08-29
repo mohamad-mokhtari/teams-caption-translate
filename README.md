@@ -104,9 +104,23 @@ Not built yet — phase 0 has to pass first.
 
 ## Panel features
 
+### Opening and closing
+
+The panel stays out of the way until it is needed:
+
+- **Turn on live captions in Teams** → the panel opens by itself
+- **Turn them off** → it closes
+- **×** closes it by hand. A small `● captions` pill appears bottom-right to reopen it
+- Closing **never clears anything**. Reopen and the whole conversation is still there
+
+An explicit close applies to that caption session only. Once captions are switched
+off and on again the panel reopens — otherwise closing it once would silently disable
+the tool for the rest of the day.
+
 | Control | Does |
 |---|---|
 | **Live / Summary** tabs | Running captions, or a per-speaker summary |
+| **×** | Close (reopen with the pill; nothing is lost) |
 | **⤡** | Maximise / restore. Drag the bottom-right corner for any size in between |
 | **–** | Collapse to the title bar |
 | Speaker chips | Colour key **and** filter — click a name to see only that person, **All** to go back |
