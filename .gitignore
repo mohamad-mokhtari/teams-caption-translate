@@ -1,0 +1,17 @@
+# Secrets — never commit. The whole point of .env.example is that .env stays local.
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local packaging output
+_downloads/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

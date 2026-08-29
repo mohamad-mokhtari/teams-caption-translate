@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "Meeting Caption Capture (phase 0)",
+  "version": "0.4.1",
+  "description": "Reads Teams live captions from the page. Capture only - no translation, no network.",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://teams.cloud.microsoft/*",
+    "https://*.cloud.microsoft/*",
+    "https://teams.microsoft.com/*",
+    "https://*.teams.microsoft.com/*",
+    "https://teams.live.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://teams.cloud.microsoft/*",
+        "https://*.cloud.microsoft/*",
+        "https://teams.microsoft.com/*",
+        "https://*.teams.microsoft.com/*",
+        "https://teams.live.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle",
+      "all_frames": true,
+      "match_about_blank": true
+    }
+  ]
+}
