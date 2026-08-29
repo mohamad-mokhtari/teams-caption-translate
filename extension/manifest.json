@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Meeting Caption Capture (phase 0)",
-  "version": "0.4.1",
-  "description": "Reads Teams live captions from the page. Capture only - no translation, no network.",
+  "name": "Meeting Caption Translator",
+  "version": "1.0.0",
+  "description": "Reads Microsoft Teams live captions and translates them via a local service.",
   "permissions": [
     "storage"
   ],
@@ -11,7 +11,9 @@
     "https://*.cloud.microsoft/*",
     "https://teams.microsoft.com/*",
     "https://*.teams.microsoft.com/*",
-    "https://teams.live.com/*"
+    "https://teams.live.com/*",
+    "http://127.0.0.1:8100/*",
+    "http://localhost:8100/*"
   ],
   "content_scripts": [
     {

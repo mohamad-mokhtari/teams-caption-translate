@@ -35,6 +35,26 @@
   const SETTLE_MS = 700;   // no change for this long => the line is final
   const MAX_ROWS  = 200;
 
+  // The translation companion, running on this same machine. 127.0.0.1 rather than
+  // a LAN address on purpose: the service holds an API key and has no auth, and a
+  // browser treats localhost as a trustworthy origin, so an https page may call it
+  // without tripping mixed-content rules.
+  const SERVER = "http://127.0.0.1:8100";
+  const CONTEXT_N = 3;     // preceding segments sent so pronouns resolve
+
+  const server = {
+    ok: false,
+    rtl: false,
+    lang: "",
+    lastError: "",
+    inflight: 0,
+    lastMs: 0,
+  };
+
+  /** Recent English segments, for context. Kept short — the point is resolving
+   *  "he"/"it"/"that", not summarising the meeting. */
+  const recent = [];
+
   // Ordered by how much we trust them. Attribute/data hooks survive CSS churn
   // better than generated class names.
   // Confirmed against Teams web on 2026-08-29: caption text lives in
@@ -69,6 +89,7 @@
     observer: null,
     /** key -> {speaker, text, el, timer, emitted} */
     pending: new Map(),
+    metaMsg: "looking for captions\u2026",
     emitted: 0,
     started: Date.now(),
   };
@@ -79,7 +100,7 @@
   // stylesheet made the panel render invisibly at the bottom of the page flow —
   // a silent failure that cost an afternoon. One file, one thing to go wrong.
   const style = document.createElement("style");
-  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n";
+  style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -109,6 +130,7 @@
       el("span", { cls: "sp" }),
       el("button", { id: "mct-pick", text: "pick area" }),
       el("button", { id: "mct-diag", text: "find text" }),
+      el("button", { id: "mct-retry", text: "reconnect" }),
       el("button", { id: "mct-dump", text: "dump" }),
       el("button", { id: "mct-copy", text: "copy" }),
       el("button", { id: "mct-hide", text: "\u2013" }),
@@ -136,7 +158,24 @@
 
   const transcript = [];   // in memory only; nothing is persisted
 
-  function meta(msg) { $meta.textContent = msg; }
+  function meta(msg) { state.metaMsg = msg; paintStatus(); }
+
+  /** One place that writes the footer, so capture state and translator state
+   *  cannot fight over it. */
+  function paintStatus() {
+    const bits = [];
+    if (state.metaMsg) bits.push(state.metaMsg);
+    if (server.ok) {
+      bits.push(`→ ${server.lang}`);
+      if (server.inflight) bits.push(`translating ${server.inflight}…`);
+      else if (server.lastMs) bits.push(`${Math.round(server.lastMs)}ms`);
+    } else {
+      bits.push(server.lastError || "translator offline");
+    }
+    $meta.textContent = bits.join(" · ");
+    $dot.classList.toggle("live", !!state.container);
+    $dot.classList.toggle("warn", !!state.container && !server.ok);
+  }
 
   function render(key, speaker, text, final) {
     let row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
@@ -144,6 +183,8 @@
       row = el("div", { cls: "mct-seg" }, [
         el("div", { cls: "mct-spk" }),
         el("div", { cls: "mct-txt" }),
+        el("div", { cls: "mct-tr" + (server.rtl ? " rtl" : "") }),
+        el("div", { cls: "mct-lat" }),
       ]);
       row.dataset.k = key;
       $log.appendChild(row);
@@ -156,10 +197,17 @@
     $log.scrollTop = $log.scrollHeight;
   }
 
-  /**
-   * A segment stopped changing. In phase 1 this is where the translator is
-   * called; for now we only record it, so the timing can be measured honestly.
-   */
+  function renderTranslation(key, text, error = "", latency = "") {
+    const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
+    if (!row) return;
+    const tr = row.querySelector(".mct-tr");
+    tr.textContent = error || text;
+    tr.className = "mct-tr" + (server.rtl ? " rtl" : "") + (error ? " err" : "");
+    row.querySelector(".mct-lat").textContent = latency;
+    $log.scrollTop = $log.scrollHeight;
+  }
+
+  /** A segment stopped changing: record it, and ask for a translation. */
   function emit(key, speaker, text, revised = false) {
     if (!revised) state.emitted++;
     if (revised) {
@@ -171,8 +219,85 @@
     }
     render(key, speaker, text, true);
     console.log(`[caption]${revised ? " (revised)" : ""}`, speaker ? speaker + ":" : "", text);
+
+    // Context is the English history, not the translations.
+    if (!revised) { recent.push(text); while (recent.length > 10) recent.shift(); }
+    else if (recent.length) recent[recent.length - 1] = text;
+
+    requestTranslation(key, speaker, text);
     const mins = Math.max((Date.now() - state.started) / 60000, 0.01);
     meta(`${state.emitted} segments · ${(state.emitted / mins).toFixed(1)}/min · capture only`);
+  }
+
+  // ---------- translation --------------------------------------------------
+
+  /**
+   * Per-line sequence numbers.
+   *
+   * A line can be revised while its first translation is still in flight, and
+   * responses can come back out of order. Without a sequence check, a slow reply
+   * for "What" can overwrite the newer, correct reply for "What country?" — the
+   * reader then sees a translation that silently contradicts the caption above it.
+   */
+  const seqOf = new Map();
+
+  async function loadConfig() {
+    try {
+      const r = await fetch(`${SERVER}/config`, { method: "GET" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const cfg = await r.json();
+      server.ok = true;
+      server.rtl = !!cfg.rtl;
+      server.lang = cfg.target_lang_name || cfg.target_lang || "";
+      server.lastError = "";
+      console.log("[caption] translator ready:", server.lang, server.rtl ? "(RTL)" : "");
+    } catch (e) {
+      server.ok = false;
+      server.lastError = `translator offline at ${SERVER}`;
+      console.warn("[caption]", server.lastError, e.message);
+    }
+    paintStatus();
+  }
+
+  async function requestTranslation(key, speaker, text) {
+    if (!server.ok) return;
+
+    const seq = (seqOf.get(key) || 0) + 1;
+    seqOf.set(key, seq);
+
+    server.inflight++;
+    paintStatus();
+    try {
+      const r = await fetch(`${SERVER}/translate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          key, speaker, text,
+          context: recent.slice(-CONTEXT_N),
+        }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+
+      // A newer revision of this line has been sent since; discard this reply.
+      if (seqOf.get(key) !== seq) return;
+
+      if (d.error) {
+        server.lastError = d.error;
+        renderTranslation(key, "", d.error);
+      } else {
+        server.lastError = "";
+        server.lastMs = d.ms;
+        renderTranslation(key, d.translation, "", d.cached ? "cached" : `${Math.round(d.ms)}ms`);
+      }
+    } catch (e) {
+      server.ok = false;
+      server.lastError = `translator unreachable — is it running on ${SERVER}?`;
+      renderTranslation(key, "", server.lastError);
+    } finally {
+      server.inflight--;
+      paintStatus();
+    }
   }
 
   // ---------- reading the caption DOM -------------------------------------
@@ -425,6 +550,11 @@
 
   /** Print the attached container's structure so selectors can be tuned against
    *  what Teams actually renders, instead of guesses. */
+  panel.querySelector("#mct-retry").onclick = () => {
+    meta("reconnecting to translator…");
+    loadConfig();
+  };
+
   panel.querySelector("#mct-dump").onclick = () => {
     if (!state.container) { meta("not attached yet"); return; }
     const tree = (node, d = 0) => {
@@ -481,13 +611,13 @@
     document.addEventListener("mouseup", () => { dragging = false; });
   })();
 
-  window.__mctCleanup = () => {
-    if (state.observer) state.observer.disconnect();
-    document.querySelectorAll("#mct-panel").forEach(n => n.remove());
-  };
+  loadConfig();
+  // The companion is a separate process the user starts by hand; poll until it
+  // appears rather than making them reload the page.
+  setInterval(() => { if (!server.ok) loadConfig(); }, 15000);
 
   console.log(
-    "[caption] phase-0 loaded |", IS_TOP ? "TOP frame" : "iframe:" + location.href.slice(0, 80),
+    "[caption] loaded |", IS_TOP ? "TOP frame" : "iframe:" + location.href.slice(0, 80),
     "| helper: __mctFindByText('hello')"
   );
 })();

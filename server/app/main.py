@@ -44,6 +44,13 @@ app.add_middleware(
     allow_methods=["POST", "GET", "OPTIONS"],
     allow_headers=["*"],
     allow_credentials=False,
+    # Chrome/Edge Private Network Access: a page on a public origin
+    # (teams.cloud.microsoft) reaching a private address (127.0.0.1) sends
+    # `Access-Control-Request-Private-Network: true` on the preflight, and refuses
+    # the real request unless the response allows it. Without this the preflight
+    # returns 400 "Disallowed CORS private-network" and the panel shows no
+    # translations, with only an opaque CORS message in the console.
+    allow_private_network=True,
 )
 
 
