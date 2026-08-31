@@ -124,13 +124,48 @@ and opening it by hand is not undone a second later by the poller.
 |---|---|
 | **Live / Summary** tabs | Running captions, or a per-speaker summary |
 | **×** | Close (reopen with the pill; nothing is lost) |
-| **⤡** | Maximise / restore. Drag the bottom-right corner for any size in between |
+| **⤡** | Cycles **small → large → full screen**. The tooltip names the next one. `Esc` leaves full screen. Drag the bottom-right corner for any size in between |
 | **–** | Collapse to the title bar |
 | Speaker chips | Colour key **and** filter — click a name to see only that person, **All** to go back |
 | **pick / find / dump** | Attach manually if auto-detect fails; `dump` prints the caption markup |
 | **reconnect** | Re-check the local translation service |
 | **copy** | Whole transcript to the clipboard |
 | **save** | Write the transcript to disk now, without waiting for the timer |
+| **↓ jump to latest** | Appears when you scroll up; takes you back to the newest line |
+
+### Scrolling back
+
+Scroll up and the panel **stops following the captions**, so you can re-read
+something while people keep talking. It resumes on its own when you scroll back to
+the bottom, or immediately if you press **↓ jump to latest**.
+
+Rows are dropped from the top after 200 of them, and the scroll position is adjusted
+to compensate — otherwise what you were reading would jump up by a line every time
+somebody spoke.
+
+### When a line gets translated
+
+A caption line is translated once it has **stopped changing** *and* **finished a
+sentence**. Those are two different questions, and treating them as one is what used
+to make the translation rewrite itself while you were reading it:
+
+> Someone says *"So the pipeline"* — pauses to think — *"writes to ClickHouse."*
+> The pause is longer than the settle window, so the fragment got translated, and
+> then the finished sentence got translated again over the top of it.
+
+Now a line that ends on a full stop goes out after 0.7s; one that does not is held
+for up to 2s, and any further speech resets that. A sentence built up a few words at
+a time is translated **once, at the end**.
+
+If the caption stream turns out not to punctuate at all — Teams does this well in
+English and unevenly elsewhere — the panel notices after a few lines and stops
+waiting, rather than adding two seconds to every line in pursuit of a full stop that
+is never coming.
+
+**One case this does not cover:** if Teams *extends* a line after a sentence has
+already completed, the whole line is retranslated and the wording can shift. Fully
+removing that means treating each sentence as its own row rather than each Teams
+caption line — a bigger change, worth doing only if you still notice it.
 
 ### Saving the meeting to a file
 
@@ -204,10 +239,14 @@ after the meeting, so the delay costs nothing.
 ### Tests
 
 ```bash
-pip install quickjs                             # for the extension tests
-python3 tests/test_panel.py                     # panel open/close, the write seal
+pip install quickjs                              # for the extension tests
+python3 tests/syntax_check.py extension/content.js
+python3 tests/test_panel.py                      # panel, scrolling, sizes, sentence detection
 server/.venv/bin/python tests/test_transcript.py # the Markdown writer
 ```
+
+`syntax_check.py` compiles the file inside a function expression that is never
+called, so every syntax error surfaces without a DOM to run against.
 
 `tests/test_panel.py` lifts the state machine **verbatim out of `content.js`** and
 runs it, rather than restating the logic — so it fails if the real code changes

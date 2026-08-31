@@ -48,6 +48,7 @@ def test_panel() -> None:
       const panel = { style: {} }, launcher = { style: {} };
       const $log = { scrollTop: 0, scrollHeight: 0 };
       function flushTranscript() { flushes++; }
+      function toBottom() {}          // scrolling is covered by test_scroll
     """ + setter + "function poll(captionsOn) {" + decide + "}")
 
     poll = lambda on: c.eval(f"poll({str(bool(on)).lower()})")
@@ -123,7 +124,152 @@ def test_seal() -> None:
     check("500 pending", c.eval("unsaved(true).length"), 200)
 
 
+# ------------------------------------------------- when is a sentence finished?
+
+def test_sentences() -> None:
+    logic = lift("  const SENTENCE_END =", "\n  // The translation companion")
+    c = quickjs.Context()
+    c.eval(logic)
+
+    print("Sentence end: recognised")
+    for t in ["Hello there.", "Can you hear me?", "Stop!", "He said \u201Cyes.\u201D",
+              "Wait\u2026", "\u0628\u0644\u0647\u061F", "It is done (finally.)"]:
+        got = bool(c.eval(f"endsSentence({t!r})".replace("'", '"')))
+        check(f"  {t!r}", got, True)
+
+    print("Sentence end: NOT a full stop")
+    # Translating on an abbreviation would cut a sentence in half mid-flow, which
+    # is the exact churn this is meant to remove.
+    for t in ["So the pipeline", "I think we should", "That costs 3.",
+              "See Fig.", "Ask Dr.", "e.g.", "Mohamad M."]:
+        got = bool(c.eval(f"endsSentence({t!r})".replace("'", '"')))
+        check(f"  {t!r}", got, False)
+
+    print("Punctuation: adapt to a stream that has none")
+    # Holding 2s for a full stop that never arrives would add two seconds to every
+    # line -- worse than the churn it avoids.
+    check("optimistic before evidence", bool(c.eval("punctuates()")), True)
+    c.eval("for (let i = 0; i < 6; i++) punctHistory.push(true);")
+    check("stream punctuates", bool(c.eval("punctuates()")), True)
+    c.eval("punctHistory.length = 0; for (let i = 0; i < 6; i++) punctHistory.push(false);")
+    check("six bare lines -> stop waiting", bool(c.eval("punctuates()")), False)
+    c.eval("punctHistory.push(true);")
+    check("one full stop -> wait again", bool(c.eval("punctuates()")), True)
+
+
+# ------------------------------------------------------------- scroll stickiness
+
+def test_scroll() -> None:
+    block = lift("  const STICK_PX = 40;", "\n  $jump.onclick")
+
+    c = quickjs.Context()
+    c.eval("""
+      let onScroll = null;
+      const $log = { scrollTop: 0, scrollHeight: 1000, clientHeight: 200,
+                     addEventListener: (_, fn) => { onScroll = fn; } };
+      const $jump = { style: {} };
+    """ + block)
+
+    print("Scroll: following the newest caption")
+    c.eval("$log.scrollTop = 800; toBottom();")
+    check("at the bottom, new caption arrives", c.eval("$log.scrollTop"), 1000)
+
+    print("Scroll: reading something further up")
+    # The reported bug: every partial caption update called this, several times a
+    # second, so scrolling up to re-read a line was impossible.
+    c.eval("$log.scrollTop = 100; $log.scrollHeight = 1200; stick = false;")
+    c.eval("toBottom();")
+    check("new caption must NOT move the view", c.eval("$log.scrollTop"), 100)
+    c.eval("toBottom(); toBottom(); toBottom();")
+    check("nor after several more", c.eval("$log.scrollTop"), 100)
+
+    print("Scroll: getting back")
+    c.eval("toBottom(true);")
+    check("the jump pill", c.eval("$log.scrollTop"), 1200)
+    check("pill hidden again", c.eval("$jump.style.display"), "none")
+
+    print("Scroll: the bottom is a tolerance, not an equality")
+    # scrollTop is fractional and content grows between frames; an equality test
+    # would unstick permanently the first time it was off by half a pixel.
+    c.eval("$log.scrollTop = 1200 - 200 - 20;")
+    check("20px off the bottom still counts", bool(c.eval("atBottom()")), True)
+    c.eval("$log.scrollTop = 1200 - 200 - 120;")
+    check("120px off does not", bool(c.eval("atBottom()")), False)
+
+
+# ------------------------------------------------------ how long before we translate
+
+def test_wait() -> None:
+    logic = lift("  const SENTENCE_END =", "\n  // The translation companion")
+    line = lift("      const wait = endsSentence", "\n\n      const timer")
+
+    c = quickjs.Context()
+    c.eval("const SETTLE_MS = 700, HOLD_MS = 2000;\n" + logic
+           + "\nfunction waitFor(text) {" + line + "\n  return wait; }")
+
+    print("Wait: a finished sentence goes straight out")
+    check("'Can you hear me?'", c.eval('waitFor("Can you hear me?")'), 700)
+    check("'It is deployed.'", c.eval('waitFor("It is deployed.")'), 700)
+
+    print("Wait: a half-finished one is held")
+    # This is the whole point. The speaker pauses to think, the fragment settles,
+    # and the old code translated it -- then translated the finished sentence
+    # again, rewriting the Persian under the reader.
+    check("'So the pipeline'", c.eval('waitFor("So the pipeline")'), 2000)
+    check("'I think we should'", c.eval('waitFor("I think we should")'), 2000)
+
+    print("Wait: an unpunctuated stream is not held at all")
+    c.eval("for (let i = 0; i < 6; i++) punctHistory.push(false);")
+    check("'so the pipeline'", c.eval('waitFor("so the pipeline")'), 700)
+
+
+# ------------------------------------------------------------------- panel sizes
+
+def test_sizes() -> None:
+    body = lift("  function setSize(ix) {", "\n  }\n", "\n  }\n")
+
+    c = quickjs.Context()
+    c.eval("""
+      const SIZES = ["small", "large", "full"];
+      let sizeIx = 0, scrolled = 0;
+      const classes = new Set();
+      const panel = { style: {}, classList: {
+        toggle: (c, on) => on ? classes.add(c) : classes.delete(c) } };
+      const $max = {};
+      function toBottom() { scrolled++; }
+    """ + body)
+
+    cls = lambda: sorted(c.eval("[...classes].join(',')").split(",")) if c.eval("classes.size") else []
+
+    print("Sizes: one button cycles three")
+    c.eval("setSize(0)"); check("small", cls(), [])
+    c.eval("setSize(1)"); check("large", cls(), ["max"])
+    c.eval("setSize(2)"); check("full", cls(), ["full"])
+    c.eval("setSize(3)"); check("wraps to small", cls(), [])
+
+    print("Sizes: a dragged or resized panel can still be resized by the button")
+    # Dragging writes left/top/right/bottom and the resize handle writes
+    # width/height. An inline style beats a class, so without clearing them the
+    # size button does nothing at all -- exactly when someone wants a bigger view.
+    c.eval("""panel.style.left = "40px"; panel.style.top = "80px";
+              panel.style.right = "auto"; panel.style.bottom = "auto";
+              panel.style.width = "300px"; panel.style.height = "200px";""")
+    c.eval("setSize(2)")
+    leftovers = [p for p in ("left", "top", "right", "bottom", "width", "height")
+                 if c.eval(f'panel.style.{p} || ""')]
+    check("inline styles cleared", leftovers, [])
+    check("full applied", cls(), ["full"])
+
+    print("Sizes: the tooltip names the next size, so the button is not a guess")
+    c.eval("setSize(0)"); check("from small", c.eval("$max.title"), "small \u2014 click for large")
+    c.eval("setSize(2)"); check("from full",  c.eval("$max.title"), "full \u2014 click for small")
+
+
 test_panel()
 test_seal()
+test_sentences()
+test_wait()
+test_scroll()
+test_sizes()
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

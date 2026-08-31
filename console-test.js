@@ -42,8 +42,46 @@
   const timers = [];
   const every = (fn, ms) => { const t = setInterval(fn, ms); timers.push(t); return t; };
 
-  const SETTLE_MS = 700;   // no change for this long => the line is final
+  /**
+   * When is a caption line finished?
+   *
+   * "It stopped changing for 700ms" is not the same question as "the sentence
+   * ended", and conflating them is what makes the translation rewrite itself
+   * under the reader. Someone says "So the pipeline" — thinks — "writes to
+   * ClickHouse." The pause is longer than the settle window, so the fragment is
+   * translated, then the finished sentence is translated again, and the Persian
+   * changes halfway through being read.
+   *
+   * So: a line that ends on a full stop settles quickly, and one that does not is
+   * given longer to finish before we give up and translate it anyway.
+   */
+  const SETTLE_MS = 700;    // ends a sentence: it is finished, translate it
+  const HOLD_MS   = 2000;   // does not: wait, the speaker is probably mid-thought
   const MAX_ROWS  = 200;
+
+  /**
+   * Sentence-final punctuation, allowing a closing quote or bracket after it.
+   * Includes the Arabic question mark, which Persian and Arabic captions use.
+   */
+  const SENTENCE_END = /[.!?\u2026\u061F]["'\u2019\u201D\u00BB)\]]?$/;
+
+  /** Full stops that do not end a sentence: abbreviations, initials, decimals. */
+  const NOT_A_STOP = /(?:\b(?:[A-Za-z]|Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|etc|approx|Inc|Ltd|Fig|No)|\d)\.$/i;
+
+  const endsSentence = (t) => SENTENCE_END.test(t) && !NOT_A_STOP.test(t);
+
+  /**
+   * Does this meeting's caption stream punctuate at all?
+   *
+   * Teams' ASR punctuates English well and other languages unevenly, and some
+   * streams produce none. Waiting HOLD_MS for a full stop that is never coming
+   * would add two seconds to every single line — trading one annoyance for a
+   * worse one. So watch what actually arrives, and stop waiting if the recent
+   * finished lines show no punctuation at all.
+   */
+  const punctHistory = [];
+  const punctuates = () =>
+    punctHistory.length < 6 || punctHistory.slice(-6).some(Boolean);
 
   // The translation companion, running on this same machine. 127.0.0.1 rather than
   // a LAN address on purpose: the service holds an API key and has no auth, and a
@@ -183,6 +221,7 @@
   const style = document.createElement("style");
   style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n\n\n/* --- layout ---------------------------------------------------------------\n   The panel is a flex column. Without an explicit flex on the scrolling areas,\n   the browser sizes them from content: the log stops growing into the space it\n   has, and the chip row gets clipped mid-row so the bottom line of chips is cut\n   in half. min-height:0 is required for a flex child to be allowed to shrink\n   below its content size and scroll instead of overflowing. */\n#mct-log      { flex: 1 1 auto; min-height: 0; }\n#mct-summary  { flex: 1 1 auto; min-height: 0; flex-direction: column; }\n#mct-head     { flex: 0 0 auto; flex-wrap: wrap; }\n.mct-meta     { flex: 0 0 auto; }\n\n/* Chips wrap freely rather than scrolling inside a fixed height \u2014 a scrollable\n   box cut rows in half, which is what looked broken. */\n#mct-speakers {\n  flex: 0 0 auto;\n  max-height: none;\n  overflow: visible;\n  padding-bottom: 6px;\n}\n.mct-chip { line-height: 1.5; }\n\n\n/* Launcher pill, shown while the panel is closed. Deliberately small and dim: it\n   is a way back in, not something to look at during a meeting. */\n#mct-launcher {\n  position: fixed; right: 16px; bottom: 16px;\n  display: none;\n  background: #14161c; color: #9096a3;\n  border: 1px solid #2a2f3a; border-radius: 20px;\n  padding: .3rem .8rem;\n  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; z-index: 2147483647;\n  box-shadow: 0 4px 14px rgba(0,0,0,.35);\n}\n#mct-launcher:hover { color: #e8e8ea; border-color: #3b4252; }\n\n#mct-close { color: #f87171; }\n";
   style.textContent += "\n\n/* Empty state. Opening the panel before anyone has spoken used to show a blank\n   box, which reads as broken rather than as ready. */\n#mct-log:empty::before {\n  content: \"Waiting for captions\u2026  Turn on live captions in Teams and start speaking.\";\n  display: block;\n  color: #7b8194;\n  font-style: italic;\n  padding: 10px 0;\n}\n\n/* Where the transcript is being written. Small, and directly under the status\n   line, because the question it answers (\"where is my file?\") is asked once and\n   then never again. */\n#mct-file {\n  flex: 0 0 auto;\n  padding: 0 10px 7px;\n  font-size: 11px;\n  color: #6b7280;\n  cursor: pointer;\n  word-break: break-all;\n}\n#mct-file:hover { color: #9096a3; }\n#mct-file:empty { display: none; }\n#mct-file.err { color: #f59e0b; cursor: default; }\n";
+  style.textContent += "\n\n/* --- full screen ----------------------------------------------------------\n   A third size beyond \"large\", for when following the conversation IS the task\n   and the meeting behind it is not. resize is off: there is nothing to resize\n   to, and leaving the native handle on gives a grab target that does nothing. */\n#mct-panel.full {\n  left: 0; top: 0; right: 0; bottom: 0;\n  width: auto; height: auto; max-height: none;\n  border: 0; border-radius: 0;\n  resize: none;\n}\n#mct-panel.full #mct-log { padding: 12px 18px; font-size: 15px; }\n#mct-panel.full .mct-seg { margin-bottom: 14px; max-width: 90ch; }\n\n/* Way back to the newest caption after scrolling up. Floats over the log rather\n   than sitting in the layout, so appearing does not reflow what is being read. */\n#mct-jump {\n  position: absolute;\n  left: 50%;\n  transform: translateX(-50%);\n  bottom: 44px;\n  display: none;\n  background: #232833; color: #e8e8ea;\n  border: 1px solid #3b4252; border-radius: 20px;\n  padding: .2rem .7rem;\n  font-size: 11px; font-weight: 600;\n  cursor: pointer; white-space: nowrap;\n  box-shadow: 0 3px 10px rgba(0,0,0,.4);\n}\n#mct-jump:hover { border-color: #4b5563; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -239,6 +278,7 @@
 
     el("div", { id: "mct-meta", cls: "mct-meta", text: "looking for captions\u2026" }),
     el("div", { id: "mct-file" }),
+    el("div", { id: "mct-jump", text: "\u2193 jump to latest" }),
   ]);
   /**
    * Small pill shown while the panel is closed.
@@ -278,7 +318,7 @@
     if (byUser) override = open ? "open" : "closed";
     panel.style.display    = open ? "flex" : "none";
     launcher.style.display = open ? "none" : "block";
-    if (open) $log.scrollTop = $log.scrollHeight;
+    if (open) toBottom();
   }
 
   function mountPanel() {
@@ -307,6 +347,43 @@
   const $sum   = panel.querySelector("#mct-summary");
   const $sumWho = panel.querySelector("#mct-sum-who");
   const $sumOut = panel.querySelector("#mct-sum-out");
+  const $jump   = panel.querySelector("#mct-jump");
+
+  /**
+   * Follow the newest caption, unless the reader has scrolled back to look at
+   * something.
+   *
+   * Every partial caption update repaints a row, and the old code scrolled to the
+   * bottom on each one — several times a second while someone is talking. Scrolling
+   * up to re-read a line was therefore impossible: you were dragged back down
+   * before you could finish it.
+   *
+   * A scroll position is fractional and the content grows between frames, so
+   * "at the bottom" has to be a tolerance, never an equality.
+   */
+  const STICK_PX = 40;
+  let stick = true;
+
+  function atBottom() {
+    return $log.scrollHeight - $log.scrollTop - $log.clientHeight <= STICK_PX;
+  }
+
+  /** Scroll to the newest caption if we are still following it. */
+  function toBottom(force = false) {
+    if (force) stick = true;
+    if (!stick) return;
+    $log.scrollTop = $log.scrollHeight;
+    $jump.style.display = "none";
+  }
+
+  $log.addEventListener("scroll", () => {
+    stick = atBottom();
+    // The pill is the way back. It appears the moment you leave the bottom, so
+    // returning never means hunting for the scrollbar in a 380px-wide box.
+    $jump.style.display = stick ? "none" : "block";
+  });
+
+  $jump.onclick = () => toBottom(true);
 
   /**
    * Every settled segment, in order.
@@ -349,7 +426,15 @@
       ]);
       row.dataset.k = key;
       $log.appendChild(row);
-      while ($log.children.length > MAX_ROWS) $log.firstChild.remove();
+      while ($log.children.length > MAX_ROWS) {
+        // Rows are dropped from the TOP, which pulls everything below it upwards.
+        // For a reader scrolled back, that is the view jumping by a line every time
+        // someone speaks. Take the removed height back out of the scroll position
+        // so what they are reading stays where it is.
+        const before = $log.scrollHeight;
+        $log.firstChild.remove();
+        if (!stick) $log.scrollTop = Math.max(0, $log.scrollTop - (before - $log.scrollHeight));
+      }
     }
     const spk = row.querySelector(".mct-spk");
     spk.textContent = speaker || "";
@@ -361,7 +446,7 @@
     const t = row.querySelector(".mct-txt");
     t.textContent = text;
     t.className = "mct-txt" + (final ? "" : " mct-live");
-    $log.scrollTop = $log.scrollHeight;
+    toBottom();
   }
 
   /** Chips double as the colour key and the filter control. */
@@ -396,7 +481,7 @@
     }
     renderChips();
     meta(name ? `showing only ${name}` : "showing everyone");
-    $log.scrollTop = $log.scrollHeight;
+    toBottom(true);
   }
 
   /** Record what a speaker said, and keep the chips and dropdown in step. */
@@ -434,7 +519,7 @@
     tr.textContent = error || text;
     tr.className = "mct-tr" + (server.rtl ? " rtl" : "") + (error ? " err" : "");
     row.querySelector(".mct-lat").textContent = latency;
-    $log.scrollTop = $log.scrollHeight;
+    toBottom();
   }
 
   /** A segment stopped changing: record it, and ask for a translation. */
@@ -734,15 +819,26 @@
 
       render(key, speaker, text, false);             // show at once, greyed
 
+      // A line that has clearly finished is translated after the short window. One
+      // that has not is held: any further speech resets this timer, so a sentence
+      // being built up a few words at a time is translated once, at the end,
+      // instead of once per pause.
+      const wait = endsSentence(text) || !punctuates() ? SETTLE_MS : HOLD_MS;
+
       const timer = setTimeout(() => {
         const cur = state.pending.get(key);
         if (!cur) return;
         // A line can settle, then be revised again ("What" -> "What country?").
         // Emit the revision under the SAME key so downstream replaces rather than
         // appending a second, superseded translation.
+        // Record whether this line ended cleanly, so `punctuates` can tell a
+        // stream that has no punctuation from one that simply has not got there yet.
+        punctHistory.push(endsSentence(cur.text));
+        if (punctHistory.length > 40) punctHistory.shift();
+
         emit(key, cur.speaker, cur.text, cur.emitted);
         cur.emitted = true;
-      }, SETTLE_MS);
+      }, wait);
 
       state.pending.set(key, { speaker, text, timer, emitted: prev?.emitted || false });
     });
@@ -976,16 +1072,47 @@
   showTab("live");
 
   // ---- maximise / restore --------------------------------------------------
-  // The default panel is small so it does not cover the meeting. Following a
-  // conversation you cannot hear needs more room than glancing at it does, so this
-  // toggles rather than picking one size for both jobs.
-  let maximised = false;
-  panel.querySelector("#mct-max").onclick = () => {
-    maximised = !maximised;
-    panel.classList.toggle("max", maximised);
-    if (maximised) { panel.style.left = ""; panel.style.top = ""; }
-    $log.scrollTop = $log.scrollHeight;
-  };
+  /**
+   * Three sizes, cycled by one button.
+   *
+   *   small  glance at it while watching the meeting   (the default)
+   *   large  read along with it                        (620px)
+   *   full   the conversation IS what you are doing    (covers the page)
+   *
+   * A cycle rather than a fourth button: the header already carries nine, and the
+   * three are points on one axis, not three unrelated choices. The tooltip names
+   * the next one so the button does not have to be guessed at.
+   */
+  const SIZES = ["small", "large", "full"];
+  let sizeIx = 0;
+  const $max = panel.querySelector("#mct-max");
+
+  function setSize(ix) {
+    sizeIx = (ix % SIZES.length + SIZES.length) % SIZES.length;
+    const mode = SIZES[sizeIx];
+
+    // Dragging writes left/top/right/bottom, the native resize handle writes
+    // width/height, and an inline style beats a class. Without clearing them, the
+    // size classes do nothing at all once the panel has been moved or resized —
+    // which is exactly when someone reaches for a bigger view.
+    for (const prop of ["left", "top", "right", "bottom", "width", "height"]) {
+      panel.style[prop] = "";
+    }
+    panel.classList.toggle("max",  mode === "large");
+    panel.classList.toggle("full", mode === "full");
+    $max.title = `${mode} \u2014 click for ${SIZES[(sizeIx + 1) % SIZES.length]}`;
+    toBottom();
+  }
+
+  $max.onclick = () => setSize(sizeIx + 1);
+  setSize(0);
+
+  // Escape leaves full screen. At that size the panel covers Teams completely, so
+  // this is the only obvious way out — and it is what every full-screen view does.
+  // Not preventDefault: Teams may want the key too, and only full screen is ours.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && SIZES[sizeIx] === "full") setSize(0);
+  });
 
   // ---- summary -------------------------------------------------------------
   panel.querySelector("#mct-sum-go").onclick = async () => {
