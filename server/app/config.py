@@ -6,10 +6,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     # --- what we translate into ---
-    # BCP-47-ish tag plus the name we put in the prompt. Persian is the first target.
+    # The DEFAULT only. Each reader chooses their own language in the panel and it
+    # travels with every request, because one service now serves people who each
+    # want a different one. This is what a brand-new install shows before anyone
+    # has chosen and before the browser's own language has been consulted.
+    #
+    # There is deliberately no source language setting. Which language a meeting is
+    # captioned in belongs to the meeting; it is detected (see /detect), never
+    # configured. A stale source setting is worse than none -- the model reads
+    # Spanish as English and produces confident nonsense.
     target_lang: str = "fa"
     target_lang_name: str = "Persian (Farsi)"
-    source_lang_name: str = "English"
 
     # --- provider: openai | ollama | anthropic ---
     provider: str = "openai"

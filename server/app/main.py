@@ -20,10 +20,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from . import languages
 from .config import settings
 from .providers import ProviderError
 from .transcript import TranscriptError, append as append_transcript, directory as transcript_dir
-from .translate import stats, summarize_speaker, translate
+from .translate import detect_language, stats, summarize_speaker, translate
 
 app = FastAPI(title="Caption Translator", version="1.0.0")
 
@@ -61,6 +62,12 @@ class TranslateIn(BaseModel):
     speaker: str = ""
     provider: str | None = None          # override per request, for A/B testing
     key: str | None = None               # caption line id; echoed back for replacement
+    # The reader's language. Per request, not per server: one service serves people
+    # who each want a different one, and only the reader gets to choose.
+    target: str | None = None
+    # What the captions look like, from /detect. A hint for the prompt, never a
+    # setting -- see build_messages.
+    source: str | None = None
 
 
 class TranslateOut(BaseModel):
@@ -68,6 +75,9 @@ class TranslateOut(BaseModel):
     cached: bool
     ms: float
     provider: str
+    # True when the reader's language already matches the captions, so nothing was
+    # translated. The panel uses it to show the line once rather than twice.
+    passthrough: bool = False
     key: str | None = None
     error: str | None = None
 
@@ -79,13 +89,23 @@ async def health():
 
 @app.get("/config")
 async def config():
-    """The extension reads this on startup so language and direction aren't hardcoded in JS."""
+    """
+    Everything the panel needs to build itself: the default language, and the full
+    list to offer in the picker.
+
+    The list lives here rather than in the extension so that adding a language is
+    one line in languages.py, not an edit in two places that drift apart. The
+    extension caches what it last saw, so the picker still works while this service
+    is unreachable.
+    """
     return {
         "target_lang": settings.target_lang,
-        "target_lang_name": settings.target_lang_name,
-        # Persian, Arabic, Hebrew and Urdu render right-to-left. Getting this wrong
-        # makes the output technically correct and practically unreadable.
-        "rtl": settings.target_lang in {"fa", "ar", "he", "ur", "ps", "sd"},
+        "target_lang_name": languages.name_of(settings.target_lang, settings.target_lang_name),
+        # Persian, Arabic and Hebrew render right-to-left. Getting this wrong makes
+        # the output technically correct and practically unreadable.
+        "rtl": languages.is_rtl(settings.target_lang),
+        "script": languages.script_of(settings.target_lang),
+        "languages": languages.LANGUAGES,
         "provider": settings.provider,
         "context_segments": settings.context_segments,
         "transcript_enabled": settings.transcript_enabled,
@@ -114,7 +134,7 @@ async def do_translate(req: TranslateIn):
     """
     t0 = time.perf_counter()
     try:
-        out = translate(req.text, req.context, req.provider)
+        out = translate(req.text, req.context, req.provider, req.target, req.source)
         return TranslateOut(**out, key=req.key)
     except ProviderError as e:
         stats["errors"] += 1
@@ -131,6 +151,7 @@ class SummaryIn(BaseModel):
     segments: list[str] = Field(default_factory=list,
                                 description="Everything this speaker said, in order")
     provider: str | None = None
+    target: str | None = None
 
 
 class SummaryOut(BaseModel):
@@ -150,11 +171,43 @@ async def do_summarize(req: SummaryIn):
     that person — so it is user-triggered, never automatic.
     """
     try:
-        return SummaryOut(**summarize_speaker(req.speaker, req.segments, req.provider))
+        return SummaryOut(**summarize_speaker(req.speaker, req.segments,
+                                              req.provider, req.target))
     except ProviderError as e:
         stats["errors"] += 1
         return SummaryOut(summary="", segments=len(req.segments), ms=0.0,
                           provider=req.provider or settings.provider, error=str(e))
+
+
+class DetectIn(BaseModel):
+    samples: list[str] = Field(default_factory=list,
+                               description="A few settled caption lines")
+    provider: str | None = None
+
+
+class DetectOut(BaseModel):
+    lang: str = "und"
+    name: str = ""
+    confident: bool = False
+    ms: float = 0.0
+    error: str | None = None
+
+
+@app.post("/detect", response_model=DetectOut)
+async def do_detect(req: DetectIn):
+    """
+    Which language is this meeting being captioned in?
+
+    Asked once per meeting, not per line. The answer decides the source hint sent
+    with each translation, and whether this reader needs translating for at all --
+    someone whose language already matches the captions should not be paying for a
+    second copy of every line.
+    """
+    try:
+        return DetectOut(**detect_language(req.samples, req.provider))
+    except ProviderError as e:
+        stats["errors"] += 1
+        return DetectOut(error=str(e))
 
 
 class Segment(BaseModel):

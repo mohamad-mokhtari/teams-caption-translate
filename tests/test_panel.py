@@ -296,7 +296,7 @@ def _drag_harness(body: str) -> quickjs.Context:
 
 
 def test_drag() -> None:
-    body = lift("  // Drag by the header", "\n  loadConfig();")
+    body = lift("  // Drag by the header", "\n  (async () => {")
     c = _drag_harness(body)
 
     print("Drag: a click that does not move must change nothing")

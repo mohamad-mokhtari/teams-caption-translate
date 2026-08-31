@@ -127,8 +127,7 @@ and opening it by hand is not undone a second later by the poller.
 | **⤡** | Cycles **small → large → full screen**. The tooltip names the next one. `Esc` leaves full screen. Drag the bottom-right corner for any size in between |
 | **–** | Collapse to the title bar |
 | Speaker chips | Colour key **and** filter — click a name to see only that person, **All** to go back |
-| **pick / find / dump** | Attach manually if auto-detect fails; `dump` prints the caption markup |
-| **reconnect** | Re-check the local translation service |
+| **⚙** | Language picker, the detected caption language, and the capture tools |
 | **copy** | Whole transcript to the clipboard |
 | **save** | Write the transcript to disk now, without waiting for the timer |
 | **↓ jump to latest** | Appears when you scroll up; takes you back to the newest line |
@@ -157,6 +156,52 @@ Full screen is not draggable — it already covers the page.
 Pressing **⤡** re-anchors the panel to the bottom-right corner. That is deliberate:
 the size classes cannot take effect while the inline styles left behind by dragging
 and the resize handle are still there.
+
+### Languages — you choose only your own
+
+**There is no "translate from X to Y".** You pick the language *you* want to read,
+and nothing else. Which language the meeting is captioned in is the meeting's
+business — it is detected automatically, per meeting.
+
+That matters because a source setting goes stale. Someone switches the meeting to
+Spanish, three people still have "from English" configured, and the translator reads
+Spanish as English and produces confident nonsense. The only way to avoid that is
+not to have the setting.
+
+Press **⚙** and choose from the dropdown. First time, it guesses from your browser's
+own language and remembers your choice after that.
+
+**Your scenario, working:** a meeting captioned in Spanish, with three people in it.
+
+| Reader | Sees | Cost |
+|---|---|---|
+| Spanish speaker | the Spanish captions, untouched | nothing — no call is made |
+| English speaker | English | one call per line |
+| Persian speaker | Persian, right-to-left | one call per line |
+
+Nobody configured Spanish. The panel worked it out from the first few lines.
+
+**The reader who already speaks the meeting's language is not translated for at
+all.** No round trip, no cost, and no second copy of every line under the first.
+This is enforced in code rather than by asking the model — told to translate
+captions into Spanish and handed Spanish, `gpt-4o-mini` returns English.
+
+**48 languages**, each with its own font stack and text direction: Arabic and Hebrew
+scripts flip the panel right-to-left; Chinese, Japanese and Korean get CJK fonts and
+break lines by character rather than by word; Thai, which has no spaces at all, gets
+`break-all` so lines wrap instead of running off the side. Adding a language is one
+line in `server/app/languages.py` — the picker builds itself from what the service
+sends.
+
+**Changing language mid-meeting** clears the translations already on screen rather
+than re-translating them. They are in the previous language, so leaving them would
+make the panel a mix of two, and re-translating what is visible could be two hundred
+calls at the press of a dropdown. New lines arrive in the new language, and the
+transcript file already has the old ones.
+
+**One honest limit:** distant pairs are worse than close ones. Japanese to Persian or
+Chinese to French are low-resource *pairs*, and the model will pivot through English
+internally. Test the pairs you actually need before promising them.
 
 ### When a line gets translated
 
@@ -254,11 +299,14 @@ after the meeting, so the delay costs nothing.
 ### Tests
 
 ```bash
-pip install quickjs                              # for the extension tests
+pip install quickjs                               # for the extension tests
 python3 tests/syntax_check.py extension/content.js
-python3 tests/test_panel.py                      # panel, scrolling, sizes, sentence detection
-server/.venv/bin/python tests/test_transcript.py # the Markdown writer
+server/.venv/bin/python tests/test_panel.py       # panel, scrolling, sizes, dragging, sentences
+server/.venv/bin/python tests/test_language.py    # the language table, pass-through, the picker
+server/.venv/bin/python tests/test_transcript.py  # the Markdown writer
 ```
+
+139 checks, all offline — nothing calls a provider, so they run without a key.
 
 `syntax_check.py` compiles the file inside a function expression that is never
 called, so every syntax error surfaces without a DOM to run against.

@@ -134,6 +134,63 @@
   /** Where the meeting is being written, and whether the last write worked. */
   const saved = { dir: "", path: "", at: 0, error: "" };
 
+  /**
+   * The reader's language — the only language anyone configures.
+   *
+   * Deliberately not "translate FROM x TO y". Which language a meeting is
+   * captioned in belongs to the meeting, changes between meetings, and is often
+   * not what anyone expects. Asking each person to keep a source language in step
+   * with it guarantees that one day somebody has it wrong and reads confident
+   * nonsense. So: the reader picks their own language, and the source is detected.
+   */
+  const prefs = { target: "" };
+
+  /** The picker's options, from /config, cached so the picker still works offline. */
+  const langs = { list: [], byCode: {} };
+
+  /**
+   * What the captions turned out to be in. Detected once per meeting from the
+   * first few settled lines — see maybeDetect.
+   */
+  const caption = { lang: "", name: "", asked: false, samples: [] };
+
+  const LANG_KEY = "mct.target";
+
+  const targetRow  = () => langs.byCode[prefs.target] || null;
+  const targetName = () => targetRow()?.name || prefs.target || "";
+  const targetRtl  = () => !!targetRow()?.rtl;
+  const targetScript = () => targetRow()?.script || "latn";
+
+  /** True when the reader already speaks the language the meeting is in, so there
+   *  is nothing to translate and no second copy of each line to show. */
+  const passthrough = () =>
+    !!caption.lang && !!prefs.target && caption.lang === prefs.target;
+
+  /**
+   * Preferences live in extension storage when there is one, and in the page's
+   * localStorage otherwise, so the console build behaves the same. Both can throw
+   * or be missing; neither is worth failing to start over.
+   */
+  const store = {
+    async get(key) {
+      try {
+        const api = globalThis.chrome?.storage;
+        if (api) {
+          const bag = await (api.sync || api.local).get(key);
+          if (bag && bag[key] != null) return bag[key];
+        }
+      } catch (e) { /* fall through to localStorage */ }
+      try { return localStorage.getItem(key) ?? null; } catch (e) { return null; }
+    },
+    async set(key, value) {
+      try {
+        const api = globalThis.chrome?.storage;
+        if (api) { await (api.sync || api.local).set({ [key]: value }); return; }
+      } catch (e) { /* fall through */ }
+      try { localStorage.setItem(key, value); } catch (e) { /* nothing else to try */ }
+    },
+  };
+
   /** Recent English segments, for context. Kept short — the point is resolving
    *  "he"/"it"/"that", not summarising the meeting. */
   const recent = [];
@@ -222,6 +279,7 @@
   style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n\n\n/* --- layout ---------------------------------------------------------------\n   The panel is a flex column. Without an explicit flex on the scrolling areas,\n   the browser sizes them from content: the log stops growing into the space it\n   has, and the chip row gets clipped mid-row so the bottom line of chips is cut\n   in half. min-height:0 is required for a flex child to be allowed to shrink\n   below its content size and scroll instead of overflowing. */\n#mct-log      { flex: 1 1 auto; min-height: 0; }\n#mct-summary  { flex: 1 1 auto; min-height: 0; flex-direction: column; }\n#mct-head     { flex: 0 0 auto; flex-wrap: wrap; }\n.mct-meta     { flex: 0 0 auto; }\n\n/* Chips wrap freely rather than scrolling inside a fixed height \u2014 a scrollable\n   box cut rows in half, which is what looked broken. */\n#mct-speakers {\n  flex: 0 0 auto;\n  max-height: none;\n  overflow: visible;\n  padding-bottom: 6px;\n}\n.mct-chip { line-height: 1.5; }\n\n\n/* Launcher pill, shown while the panel is closed. Deliberately small and dim: it\n   is a way back in, not something to look at during a meeting. */\n#mct-launcher {\n  position: fixed; right: 16px; bottom: 16px;\n  display: none;\n  background: #14161c; color: #9096a3;\n  border: 1px solid #2a2f3a; border-radius: 20px;\n  padding: .3rem .8rem;\n  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; z-index: 2147483647;\n  box-shadow: 0 4px 14px rgba(0,0,0,.35);\n}\n#mct-launcher:hover { color: #e8e8ea; border-color: #3b4252; }\n\n#mct-close { color: #f87171; }\n";
   style.textContent += "\n\n/* Empty state. Opening the panel before anyone has spoken used to show a blank\n   box, which reads as broken rather than as ready. */\n#mct-log:empty::before {\n  content: \"Waiting for captions\u2026  Turn on live captions in Teams and start speaking.\";\n  display: block;\n  color: #7b8194;\n  font-style: italic;\n  padding: 10px 0;\n}\n\n/* Where the transcript is being written. Small, and directly under the status\n   line, because the question it answers (\"where is my file?\") is asked once and\n   then never again. */\n#mct-file {\n  flex: 0 0 auto;\n  padding: 0 10px 7px;\n  font-size: 11px;\n  color: #6b7280;\n  cursor: pointer;\n  word-break: break-all;\n}\n#mct-file:hover { color: #9096a3; }\n#mct-file:empty { display: none; }\n#mct-file.err { color: #f59e0b; cursor: default; }\n";
   style.textContent += "\n\n/* --- full screen ----------------------------------------------------------\n   A third size beyond \"large\", for when following the conversation IS the task\n   and the meeting behind it is not. resize is off: there is nothing to resize\n   to, and leaving the native handle on gives a grab target that does nothing. */\n#mct-panel.full {\n  left: 0; top: 0; right: 0; bottom: 0;\n  width: auto; height: auto; max-height: none;\n  border: 0; border-radius: 0;\n  resize: none;\n}\n#mct-panel.full #mct-log { padding: 12px 18px; font-size: 15px; }\n#mct-panel.full .mct-seg { margin-bottom: 14px; max-width: 90ch; }\n\n/* Way back to the newest caption after scrolling up. Floats over the log rather\n   than sitting in the layout, so appearing does not reflow what is being read. */\n#mct-jump {\n  position: absolute;\n  left: 50%;\n  transform: translateX(-50%);\n  bottom: 44px;\n  display: none;\n  background: #232833; color: #e8e8ea;\n  border: 1px solid #3b4252; border-radius: 20px;\n  padding: .2rem .7rem;\n  font-size: 11px; font-weight: 600;\n  cursor: pointer; white-space: nowrap;\n  box-shadow: 0 3px 10px rgba(0,0,0,.4);\n}\n#mct-jump:hover { border-color: #4b5563; }\n";
+  style.textContent += "\n\n/* --- settings row ---------------------------------------------------------\n   Hidden behind the gear. The language picker is a set-once control, so it does\n   not earn permanent space in a 380px header -- but the current language is\n   always visible in the status line below, so the state is never hidden even\n   when the control is. The capture tools live here too: they are meaningless to\n   anyone who is not debugging a selector, and they were crowding out the things\n   people actually press. */\n#mct-settings {\n  display: none;\n  flex: 0 0 auto;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  border-bottom: 1px solid #2a2f3a;\n  background: #11131a;\n}\n#mct-settings.open { display: flex; }\n#mct-settings label { font-size: 11px; color: #9096a3; display: block; margin-bottom: 3px; }\n#mct-lang {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 13px;\n}\n#mct-detected { font-size: 11px; color: #7b8194; }\n#mct-detected b { color: #9096a3; font-weight: 600; }\n#mct-tools { display: flex; flex-wrap: wrap; gap: 4px; }\n#mct-tools button {\n  background: #232833; color: #9096a3; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n#mct-tools button:hover { color: #e8e8ea; }\n\n/* --- scripts --------------------------------------------------------------\n   A font stack per writing system. The Latin defaults render Chinese, Japanese,\n   Korean, Thai and the Indic scripts as tofu or as something a reader can only\n   just make out, and CJK also breaks lines by character rather than by word --\n   so word-break has to be relaxed or every line breaks in the wrong place. */\n.mct-tr.s-arab, .mct-sum-out.s-arab {\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", \"Iranian Sans\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.s-hebr, .mct-sum-out.s-hebr {\n  font-family: \"Segoe UI\", Arial, \"Noto Sans Hebrew\", sans-serif; font-size: 14px;\n}\n.mct-tr.s-hans, .mct-sum-out.s-hans,\n.mct-tr.s-hant, .mct-sum-out.s-hant {\n  font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-jpan, .mct-sum-out.s-jpan {\n  font-family: \"Yu Gothic\", \"Hiragino Sans\", \"Noto Sans CJK JP\", \"Meiryo\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-kore, .mct-sum-out.s-kore {\n  font-family: \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans CJK KR\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n/* Thai and Khmer have no spaces between words, so a browser that breaks on\n   spaces will not break at all and the line runs off the side. */\n.mct-tr.s-thai, .mct-sum-out.s-thai {\n  font-family: \"Leelawadee UI\", \"Noto Sans Thai\", Tahoma, sans-serif;\n  font-size: 15px; word-break: break-all; line-height: 1.8;\n}\n.mct-tr.s-deva, .mct-sum-out.s-deva,\n.mct-tr.s-beng, .mct-sum-out.s-beng,\n.mct-tr.s-guru, .mct-sum-out.s-guru,\n.mct-tr.s-taml, .mct-sum-out.s-taml,\n.mct-tr.s-telu, .mct-sum-out.s-telu {\n  font-family: \"Nirmala UI\", \"Noto Sans\", sans-serif; font-size: 15px; line-height: 1.75;\n}\n.mct-tr.s-armn, .mct-sum-out.s-armn,\n.mct-tr.s-geor, .mct-sum-out.s-geor,\n.mct-tr.s-grek, .mct-sum-out.s-grek,\n.mct-tr.s-cyrl, .mct-sum-out.s-cyrl {\n  font-family: \"Segoe UI\", \"Noto Sans\", sans-serif;\n}\n\n/* Nothing to translate: the reader already speaks the meeting's language, so the\n   translation lane is not drawn at all rather than echoing each line back. */\n#mct-panel.passthrough .mct-tr,\n#mct-panel.passthrough .mct-lat { display: none; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -250,15 +308,27 @@
       el("span", { id: "mct-tab-live",  cls: "mct-tab on", text: "Live" }),
       el("span", { id: "mct-tab-sum",   cls: "mct-tab",    text: "Summary" }),
       el("span", { cls: "sp" }),
-      el("button", { id: "mct-pick",  text: "pick" }),
-      el("button", { id: "mct-diag",  text: "find" }),
-      el("button", { id: "mct-dump",  text: "dump" }),
-      el("button", { id: "mct-retry", text: "reconnect" }),
       el("button", { id: "mct-copy",  text: "copy" }),
       el("button", { id: "mct-save",  text: "save", title: "write the transcript now" }),
+      el("button", { id: "mct-gear",  text: "\u2699", title: "language and tools" }),
       el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
       el("button", { id: "mct-close", text: "\u00d7", title: "close" }),
+    ]),
+
+    // Language, and the capture tools. Hidden until the gear is pressed.
+    el("div", { id: "mct-settings" }, [
+      el("div", {}, [
+        el("label", { text: "Show captions in" }),
+        el("select", { id: "mct-lang" }),
+      ]),
+      el("div", { id: "mct-detected" }),
+      el("div", { id: "mct-tools" }, [
+        el("button", { id: "mct-diag",  text: "find captions" }),
+        el("button", { id: "mct-pick",  text: "pick manually" }),
+        el("button", { id: "mct-dump",  text: "dump markup" }),
+        el("button", { id: "mct-retry", text: "reconnect" }),
+      ]),
     ]),
 
     // Speaker chips: colour key, and the filter control. Clicking one shows only
@@ -385,6 +455,100 @@
 
   $jump.onclick = () => toBottom(true);
 
+  const $settings = panel.querySelector("#mct-settings");
+  const $lang     = panel.querySelector("#mct-lang");
+  const $detected = panel.querySelector("#mct-detected");
+
+  // ---------- language ------------------------------------------------------
+
+  /**
+   * Pick a starting language for someone who has never chosen one.
+   *
+   * The browser's own language is the best guess available and is right most of
+   * the time — a colleague in France has a French browser. Falling back to the
+   * service's default would show everyone Persian, which is right for one person
+   * and wrong for the rest.
+   */
+  function guessTarget(fallback) {
+    for (const tag of (navigator.languages || [navigator.language || ""])) {
+      if (!tag) continue;
+      if (langs.byCode[tag]) return tag;                       // exact, e.g. zh-TW
+      const base = tag.split("-")[0].toLowerCase();
+      if (langs.byCode[base]) return base;                     // fr-CA -> fr
+    }
+    return fallback;
+  }
+
+  function buildPicker() {
+    $lang.textContent = "";
+    for (const l of langs.list) {
+      // The endonym next to the English name: someone looking for their own
+      // language scans for how they write it, not for how English spells it.
+      const label = l.native && l.native !== l.name ? `${l.name} \u2014 ${l.native}` : l.name;
+      $lang.appendChild(el("option", { value: l.code, text: label }));
+    }
+    if (prefs.target) $lang.value = prefs.target;
+  }
+
+  /**
+   * Change the reader's language.
+   *
+   * Existing translations are cleared rather than re-translated. They are in the
+   * previous language, so leaving them would make the panel a mix of two; and
+   * re-translating what is on screen could be two hundred calls at the press of a
+   * dropdown. New lines arrive in the new language, and the transcript file
+   * already has the old ones.
+   */
+  async function setTarget(code, { persist = true } = {}) {
+    if (!code || code === prefs.target) return;
+    prefs.target = code;
+    if ($lang.value !== code) $lang.value = code;
+    if (persist) await store.set(LANG_KEY, code);
+
+    for (const row of $log.querySelectorAll(".mct-seg")) {
+      const tr = row.querySelector(".mct-tr");
+      tr.textContent = "";
+      tr.className = trClass();
+      row.querySelector(".mct-lat").textContent = "";
+    }
+    applyPassthrough();
+    paintDetected();
+    paintStatus();
+    meta(`showing captions in ${targetName()}`);
+  }
+
+  $lang.onchange = () => setTarget($lang.value);
+
+  /** The translation lane's classes: direction and the script's font stack. */
+  const trClass = (error = "") =>
+    "mct-tr" + (targetRtl() ? " rtl" : "") + ` s-${targetScript()}` + (error ? " err" : "");
+
+  function applyPassthrough() {
+    panel.classList.toggle("passthrough", passthrough());
+  }
+
+  function paintDetected() {
+    if (!caption.lang) {
+      $detected.textContent = caption.asked
+        ? "Could not tell what language the captions are in."
+        : "Listening for a few lines to work out the caption language\u2026";
+      return;
+    }
+    $detected.textContent = "";
+    $detected.appendChild(el("span", { text: "Captions are in " }));
+    $detected.appendChild(el("b", { text: caption.name || caption.lang }));
+    $detected.appendChild(el("span", {
+      text: passthrough()
+        ? " \u2014 same as yours, so nothing is being translated."
+        : ` \u2014 translating into ${targetName()}.`,
+    }));
+  }
+
+  panel.querySelector("#mct-gear").onclick = () => {
+    $settings.classList.toggle("open");
+    if ($settings.classList.contains("open")) paintDetected();
+  };
+
   /**
    * Hiding the log and bringing it back.
    *
@@ -431,7 +595,8 @@
     const bits = [];
     if (state.metaMsg) bits.push(state.metaMsg);
     if (server.ok) {
-      bits.push(`→ ${server.lang}`);
+      if (passthrough()) bits.push(`${caption.name} — not translating`);
+      else if (targetName()) bits.push(`→ ${targetName()}`);
       if (server.inflight) bits.push(`translating ${server.inflight}…`);
       else if (server.lastMs) bits.push(`${Math.round(server.lastMs)}ms`);
     } else {
@@ -448,7 +613,7 @@
       row = el("div", { cls: "mct-seg" }, [
         el("div", { cls: "mct-spk" }),
         el("div", { cls: "mct-txt" }),
-        el("div", { cls: "mct-tr" + (server.rtl ? " rtl" : "") }),
+        el("div", { cls: trClass() }),
         el("div", { cls: "mct-lat" }),
       ]);
       row.dataset.k = key;
@@ -544,7 +709,7 @@
     if (!row) return;
     const tr = row.querySelector(".mct-tr");
     tr.textContent = error || text;
-    tr.className = "mct-tr" + (server.rtl ? " rtl" : "") + (error ? " err" : "");
+    tr.className = trClass(error);
     row.querySelector(".mct-lat").textContent = latency;
     toBottom();
   }
@@ -601,15 +766,32 @@
       if (!r.ok) throw new Error("HTTP " + r.status);
       const cfg = await r.json();
       server.ok = true;
-      server.rtl = !!cfg.rtl;
-      server.lang = cfg.target_lang_name || cfg.target_lang || "";
       server.transcripts = !!cfg.transcript_enabled;
+
+      if (Array.isArray(cfg.languages) && cfg.languages.length) {
+        langs.list = cfg.languages;
+        langs.byCode = Object.fromEntries(cfg.languages.map(l => [l.code, l]));
+        // Cached so the picker still works while the service is unreachable -- the
+        // list is static data, and a dropdown that empties itself when the service
+        // blips looks broken.
+        store.set("mct.languages", JSON.stringify(cfg.languages));
+        buildPicker();
+      }
+      // Stored choice wins; then the browser's own language; then the service's
+      // default. Only ever resolved once, never overwritten by a later poll.
+      if (!prefs.target) {
+        const stored = await store.get(LANG_KEY);
+        await setTarget(
+          (stored && langs.byCode[stored]) ? stored : guessTarget(cfg.target_lang || "en"),
+          { persist: false },
+        );
+      }
       // Shown before anything has been written, so the folder is discoverable from
       // the moment the panel opens rather than only after the first flush.
       if (cfg.transcript_dir) saved.dir = cfg.transcript_dir;
       server.lastError = "";
       paintFile();
-      console.log("[caption] translator ready:", server.lang, server.rtl ? "(RTL)" : "",
+      console.log("[caption] translator ready:", targetName(), targetRtl() ? "(RTL)" : "",
                   server.transcripts ? `| saving to ${saved.dir}` : "| not saving");
     } catch (e) {
       server.ok = false;
@@ -619,8 +801,60 @@
     paintStatus();
   }
 
+  /**
+   * Work out what language the captions are in — once, from the first real lines.
+   *
+   * Waits for enough text to be worth asking about. A detector fed four words
+   * guesses, and a wrong guess here is expensive: it decides both the hint given
+   * to the translator and whether this reader is translated for at all.
+   */
+  const DETECT_MIN_CHARS = 90;
+  const DETECT_MAX_LINES = 6;
+
+  async function maybeDetect(text) {
+    if (caption.asked || !server.ok) return;
+
+    caption.samples.push(text);
+    const total = caption.samples.join(" ").length;
+    if (total < DETECT_MIN_CHARS && caption.samples.length < DETECT_MAX_LINES) return;
+
+    caption.asked = true;
+    try {
+      const r = await fetch(`${SERVER}/detect`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ samples: caption.samples }),
+      });
+      const d = await r.json();
+      if (d.lang && d.lang !== "und") {
+        caption.lang = d.lang;
+        caption.name = d.name || d.lang;
+        console.log("[caption] captions are in", caption.name,
+                    passthrough() ? "(same as yours - not translating)" : "");
+      } else {
+        // Not fatal: without a source hint the translator still works, it just
+        // has less to go on. Allow another try as more of the meeting arrives.
+        caption.asked = false;
+        caption.samples = [];
+      }
+    } catch (e) {
+      caption.asked = false;
+      caption.samples = [];
+    }
+    applyPassthrough();
+    paintDetected();
+    paintStatus();
+  }
+
   async function requestTranslation(key, speaker, text) {
     if (!server.ok) return;
+
+    maybeDetect(text);
+
+    // The reader already speaks the meeting's language. The service would hand the
+    // line straight back, so do not even ask: it is a round trip and a duplicate
+    // line under every caption for no gain.
+    if (passthrough()) return;
 
     const seq = (seqOf.get(key) || 0) + 1;
     seqOf.set(key, seq);
@@ -634,6 +868,9 @@
         body: JSON.stringify({
           key, speaker, text,
           context: recent.slice(-CONTEXT_N),
+          target: prefs.target,
+          // A hint, not an instruction. Empty until detection has run.
+          source: caption.lang || undefined,
         }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
@@ -1156,7 +1393,7 @@
       const r = await fetch(`${SERVER}/summarize`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ speaker: who, segments }),
+        body: JSON.stringify({ speaker: who, segments, target: prefs.target }),
       });
       if (!r.ok) throw new Error("HTTP " + r.status);
       const d = await r.json();
@@ -1167,7 +1404,7 @@
       }
       // Summaries are long-form prose; RTL matters even more here than for a
       // single caption line.
-      $sumOut.className = "mct-sum-out" + (server.rtl ? " rtl" : "");
+      $sumOut.className = `mct-sum-out${targetRtl() ? " rtl" : ""} s-${targetScript()}`;
       $sumOut.textContent = d.summary;
       meta(`summarised ${d.segments} segments · ${Math.round(d.ms)}ms`);
     } catch (e) {
@@ -1301,7 +1538,30 @@
     document.addEventListener("mouseup", () => { armed = false; moving = false; });
   })();
 
-  loadConfig();
+  /**
+   * Restore the reader's language before anything else.
+   *
+   * The list and the choice both come from storage first, so the picker is
+   * populated and correct even while the service is unreachable. Waiting for
+   * /config would show an empty dropdown to anyone who opened the panel before
+   * starting the companion, which reads as broken rather than as not-yet-ready.
+   */
+  (async () => {
+    try {
+      const cached = JSON.parse((await store.get("mct.languages")) || "null");
+      if (Array.isArray(cached) && cached.length) {
+        langs.list = cached;
+        langs.byCode = Object.fromEntries(cached.map(l => [l.code, l]));
+        buildPicker();
+      }
+    } catch (e) { /* a bad cache is not worth failing to start over */ }
+
+    const stored = await store.get(LANG_KEY);
+    if (stored && langs.byCode[stored]) await setTarget(stored, { persist: false });
+
+    loadConfig();
+  })();
+
   // The companion is a separate process the user starts by hand; poll until it
   // appears rather than making them reload the page.
   every(() => { if (!server.ok) loadConfig(); }, 15000);
