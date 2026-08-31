@@ -139,9 +139,24 @@ Scroll up and the panel **stops following the captions**, so you can re-read
 something while people keep talking. It resumes on its own when you scroll back to
 the bottom, or immediately if you press **↓ jump to latest**.
 
+Your place is kept across **Summary** and **collapse** too. Hiding an element with
+`display: none` discards its scroll position — the browser has no box to keep it
+on — so both are saved and put back by hand. If you were following the newest line
+when you left, you come back to the newest line, not the one that was newest then.
+
 Rows are dropped from the top after 200 of them, and the scroll position is adjusted
 to compensate — otherwise what you were reading would jump up by a line every time
 somebody spoke.
+
+### Moving it
+
+Drag the title bar. A click that does not move is just a click, and the panel always
+keeps 120px on screen so it cannot be thrown somewhere you can no longer reach it.
+Full screen is not draggable — it already covers the page.
+
+Pressing **⤡** re-anchors the panel to the bottom-right corner. That is deliberate:
+the size classes cannot take effect while the inline styles left behind by dragging
+and the resize handle are still there.
 
 ### When a line gets translated
 

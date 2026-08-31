@@ -385,6 +385,33 @@
   $jump.onclick = () => toBottom(true);
 
   /**
+   * Hiding the log and bringing it back.
+   *
+   * `display: none` discards an element's scroll position — the browser has no box
+   * to keep it on. So switching to Summary and back dropped the reader at the
+   * oldest caption in the log, which is what "the scroll disappeared" was.
+   *
+   * Both the position and whether we were following the newest line are saved,
+   * because whichever of the two the reader had chosen is the one to restore.
+   */
+  let logScroll = 0, logStick = true;
+
+  function hideLog() {
+    if ($log.style.display === "none") return;   // already hidden; do not overwrite
+    logScroll = $log.scrollTop;
+    logStick  = stick;
+    $log.style.display = "none";
+  }
+
+  function showLog() {
+    $log.style.display = "block";
+    stick = logStick;
+    // Only now that it has a box again: scrollTop on a hidden element is dropped.
+    if (stick) toBottom(true);
+    else { $log.scrollTop = logScroll; $jump.style.display = "block"; }
+  }
+
+  /**
    * Every settled segment, in order.
    *
    * Each record is {id, key, t, firstSeen, speaker, text, translation, saved}.
@@ -1061,7 +1088,9 @@
     // #mct-speakers is the exception: it keeps "" on purpose, so the `:empty` rule
     // can still hide the chip row before anyone has spoken. An inline value would
     // override that and leave an empty strip.
-    $log.style.display   = live ? "block" : "none";
+    // Via hideLog/showLog rather than setting display directly: the log's scroll
+    // position does not survive being hidden, and has to be put back by hand.
+    if (live) showLog(); else hideLog();
     $chips.style.display = live ? "" : "none";
     $sum.style.display   = live ? "none" : "flex";
     if (!live) syncSpeakerOptions();
@@ -1205,28 +1234,70 @@
   let hidden = false;
   panel.querySelector("#mct-hide").onclick = () => {
     hidden = !hidden;
-    $log.style.display = hidden ? "none" : "";
+    // Same reason as the Summary tab: collapsing loses the scroll position unless
+    // it is saved and restored.
+    if (hidden) hideLog(); else showLog();
     panel.querySelector("#mct-hide").textContent = hidden ? "+" : "–";
   };
 
   // Drag by the header — the panel will otherwise cover something important.
   (() => {
     const head = panel.querySelector("#mct-head");
-    let sx, sy, ox, oy, dragging = false;
-    head.addEventListener("mousedown", e => {
+
+    const DRAG_PX = 3;    // below this the pointer wobbled; it was a click
+    const KEEP_PX = 120;  // this much of the panel always stays on screen
+
+    let sx, sy, ox, oy, pw, armed = false, moving = false;
+
+    head.addEventListener("mousedown", (e) => {
       if (e.target.tagName === "BUTTON") return;
-      dragging = true;
+      if (SIZES[sizeIx] === "full") return;    // it covers the page; nowhere to move it
+
       const r = panel.getBoundingClientRect();
-      sx = e.clientX; sy = e.clientY; ox = r.left; oy = r.top;
-      panel.style.right = "auto"; panel.style.bottom = "auto";
+      sx = e.clientX; sy = e.clientY;
+      ox = r.left;    oy = r.top;
+      pw = r.width;                            // measured once, or the clamp feeds back
+      armed = true; moving = false;
       e.preventDefault();
+      // Deliberately no style change here. See the comment in mousemove.
     });
-    document.addEventListener("mousemove", e => {
-      if (!dragging) return;
-      panel.style.left = ox + e.clientX - sx + "px";
-      panel.style.top  = oy + e.clientY - sy + "px";
+
+    document.addEventListener("mousemove", (e) => {
+      if (!armed) return;
+      const dx = e.clientX - sx, dy = e.clientY - sy;
+
+      if (!moving) {
+        if (Math.abs(dx) < DRAG_PX && Math.abs(dy) < DRAG_PX) return;
+        moving = true;
+
+        /*
+         * Re-anchor from the bottom-right corner to explicit coordinates.
+         *
+         * This has to happen on the first real movement, NOT on mousedown. The
+         * panel is anchored with right/bottom and no left/top; clearing right and
+         * bottom before setting left and top leaves all four insets auto, and a
+         * fixed element with four auto insets falls to its *static* position —
+         * the end of <body>, off the bottom of the page.
+         *
+         * A single click on the header therefore made the panel vanish, with no
+         * way back short of reloading, which also throws away the transcript.
+         */
+        panel.style.right  = "auto";
+        panel.style.bottom = "auto";
+        panel.style.left   = ox + "px";
+        panel.style.top    = oy + "px";
+      }
+
+      // Keep enough of it on screen to grab again. Dragged fully outside the
+      // viewport the header is unreachable, and that is the same lost panel by a
+      // slower route.
+      const x = Math.min(Math.max(ox + dx, KEEP_PX - pw), innerWidth - KEEP_PX);
+      const y = Math.min(Math.max(oy + dy, 0), innerHeight - 32);
+      panel.style.left = x + "px";
+      panel.style.top  = y + "px";
     });
-    document.addEventListener("mouseup", () => { dragging = false; });
+
+    document.addEventListener("mouseup", () => { armed = false; moving = false; });
   })();
 
   loadConfig();

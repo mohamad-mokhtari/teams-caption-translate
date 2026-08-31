@@ -265,11 +265,134 @@ def test_sizes() -> None:
     c.eval("setSize(2)"); check("from full",  c.eval("$max.title"), "full \u2014 click for small")
 
 
+# ------------------------------------------------------------------ dragging
+
+def _drag_harness(body: str) -> quickjs.Context:
+    c = quickjs.Context()
+    c.eval("""
+      const SIZES = ["small", "large", "full"];
+      let sizeIx = 0;
+      const innerWidth = 1600, innerHeight = 900;
+      const handlers = {};
+      const rect = { left: 1204, top: 500, width: 380, height: 300 };
+      const panel = {
+        style: {},
+        getBoundingClientRect: () => rect,
+        querySelector: () => ({ addEventListener: (t, fn) => { handlers[t] = fn; } }),
+      };
+      const document = { addEventListener: (t, fn) => { handlers[t] = fn; } };
+      function fire(type, x, y, tag) {
+        handlers[type] && handlers[type]({
+          clientX: x, clientY: y, target: { tagName: tag || "SPAN" },
+          preventDefault: () => {},
+        });
+      }
+      function inline() {
+        return ["left", "top", "right", "bottom"]
+          .filter(p => panel.style[p]).map(p => p + ":" + panel.style[p]).join(" ");
+      }
+    """ + body)
+    return c
+
+
+def test_drag() -> None:
+    body = lift("  // Drag by the header", "\n  loadConfig();")
+    c = _drag_harness(body)
+
+    print("Drag: a click that does not move must change nothing")
+    # The bug: mousedown set right:auto and bottom:auto without setting left/top.
+    # A fixed element with all four insets auto falls to its static position --
+    # the end of <body>, off the page. One click and the panel was gone, with no
+    # way back but a reload, which also discards the transcript.
+    c.eval('fire("mousedown", 1300, 510)')
+    check("nothing written on mousedown", c.eval("inline()"), "")
+    c.eval('fire("mouseup", 1300, 510)')
+    check("nothing written after mouseup", c.eval("inline()"), "")
+
+    print("Drag: a 2px wobble is still a click")
+    c.eval('fire("mousedown", 1300, 510); fire("mousemove", 1302, 511);')
+    check("below the threshold", c.eval("inline()"), "")
+    c.eval('fire("mouseup", 1302, 511)')
+
+    print("Drag: a real drag re-anchors and moves")
+    c.eval('fire("mousedown", 1300, 510); fire("mousemove", 1100, 400);')
+    check("left set",   c.eval("panel.style.left"),   "1004px")
+    check("top set",    c.eval("panel.style.top"),    "390px")
+    check("right freed",  c.eval("panel.style.right"),  "auto")
+    check("bottom freed", c.eval("panel.style.bottom"), "auto")
+
+    print("Drag: cannot be thrown off screen and lost")
+    # A panel dragged outside the viewport cannot be grabbed again -- the same lost
+    # panel as the bug above, just more slowly.
+    c.eval('fire("mousemove", -9000, -9000)')
+    check("clamped left",  c.eval("parseInt(panel.style.left)"), 120 - 380)
+    check("clamped top",   c.eval("parseInt(panel.style.top)"), 0)
+    c.eval('fire("mousemove", 9000, 9000)')
+    check("clamped right", c.eval("parseInt(panel.style.left)"), 1600 - 120)
+    check("clamped bottom",c.eval("parseInt(panel.style.top)"), 900 - 32)
+    c.eval('fire("mouseup", 0, 0)')
+
+    print("Drag: the header buttons are not drag handles")
+    c.eval("panel.style = {};")
+    c.eval('fire("mousedown", 1300, 510, "BUTTON"); fire("mousemove", 1000, 300);')
+    check("a button press does not drag", c.eval("inline()"), "")
+
+    print("Drag: full screen is not draggable")
+    c.eval("panel.style = {}; sizeIx = 2;")
+    c.eval('fire("mousedown", 800, 10); fire("mousemove", 400, 300);')
+    check("full screen ignores the header", c.eval("inline()"), "")
+
+
+# ----------------------------------------------- the scroll position survives hiding
+
+def test_log_hide() -> None:
+    block = lift("  let logScroll = 0, logStick = true;", "\n  function meta(")
+
+    c = quickjs.Context()
+    c.eval("""
+      const $log = { scrollTop: 0, scrollHeight: 2000, clientHeight: 200, style: {} };
+      const $jump = { style: {} };
+      let stick = true;
+      function toBottom(force) { if (force) stick = true;
+        if (stick) { $log.scrollTop = $log.scrollHeight; $jump.style.display = "none"; } }
+      // display:none discards scrollTop, exactly as a browser does.
+      function hide() { hideLog(); $log.scrollTop = 0; }
+    """ + block)
+
+    print("Hiding: reading something further up, then a round trip to Summary")
+    # This is the reported bug. Hiding an element drops its scroll position, so
+    # coming back put the reader at the oldest caption with no warning.
+    c.eval("$log.scrollTop = 640; stick = false;")
+    c.eval("hide()")
+    check("scrollTop wiped while hidden", c.eval("$log.scrollTop"), 0)
+    c.eval("showLog()")
+    check("put back where they were", c.eval("$log.scrollTop"), 640)
+    check("still not following", bool(c.eval("stick")), False)
+    check("jump pill still offered", c.eval("$jump.style.display"), "block")
+
+    print("Hiding: following the newest line, then a round trip")
+    c.eval("stick = true; $log.scrollTop = 2000;")
+    c.eval("hide(); $log.scrollHeight = 2600; showLog()")
+    # Following the conversation means the NEWEST line, not the line that was
+    # newest when the tab was left.
+    check("goes to the new bottom", c.eval("$log.scrollTop"), 2600)
+    check("pill hidden", c.eval("$jump.style.display"), "none")
+
+    print("Hiding: hiding twice must not overwrite the saved position")
+    # Summary tab then collapse, or any double-hide: the second call sees a
+    # scrollTop of 0 and would save that as the place to return to.
+    c.eval("stick = false; $log.scrollTop = 1234;")
+    c.eval("hide(); hide(); showLog()")
+    check("original position kept", c.eval("$log.scrollTop"), 1234)
+
+
 test_panel()
 test_seal()
 test_sentences()
 test_wait()
 test_scroll()
+test_log_hide()
 test_sizes()
+test_drag()
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)
