@@ -111,11 +111,14 @@ The panel stays out of the way until it is needed:
 - **Turn on live captions in Teams** → the panel opens by itself
 - **Turn them off** → it closes
 - **×** closes it by hand. A small `● captions` pill appears bottom-right to reopen it
+- **Click the pill any time** — before a meeting, or mid-meeting with nobody talking —
+  and it opens and *stays* open, showing an empty transcript rather than nothing
 - Closing **never clears anything**. Reopen and the whole conversation is still there
 
-An explicit close applies to that caption session only. Once captions are switched
-off and on again the panel reopens — otherwise closing it once would silently disable
-the tool for the rest of the day.
+An explicit choice — opened from the pill, or dismissed with **×** — holds until
+captions are next switched on or off. After that the panel goes back to following
+them. So dismissing it does not silently disable the tool for the rest of the day,
+and opening it by hand is not undone a second later by the poller.
 
 | Control | Does |
 |---|---|
@@ -127,6 +130,88 @@ the tool for the rest of the day.
 | **pick / find / dump** | Attach manually if auto-detect fails; `dump` prints the caption markup |
 | **reconnect** | Re-check the local translation service |
 | **copy** | Whole transcript to the clipboard |
+| **save** | Write the transcript to disk now, without waiting for the timer |
+
+### Saving the meeting to a file
+
+Every conversation is appended to a Markdown file so a meeting can be re-read later.
+
+**Where:** `~/teams-captions/` — `C:\Users\<you>\teams-captions\` on Windows. One
+file per session, named for when it started: `2026-08-31_1502_zz01.md`. The panel
+shows the full path on its bottom line; **click it to copy**.
+
+Change the folder in `server/.env`:
+
+```
+TRANSCRIPT_DIR=D:/meetings
+TRANSCRIPT_ENABLED=true
+```
+
+**What it looks like:**
+
+```markdown
+# Meeting transcript
+
+- **Started:** 31/08/2026, 15:02:11
+- **Source:** Microsoft Teams live captions
+- **Translated into:** Persian (Farsi)
+
+---
+
+**Mohamad Mokhtari**
+
+`15:02:14` Good morning everyone, can you all hear me?
+> صبح بخیر همگی، صدای من را می‌شنوید؟
+
+`15:02:22` Today I want to walk through the feature extraction pipeline.
+> امروز می‌خواهم پایپ‌لاین استخراج ویژگی را مرور کنم.
+
+**Sarah Chen**
+
+`15:02:41` Is that the one that writes to ml_rules_features?
+> همان است که در ml_rules_features می‌نویسد؟
+```
+
+The speaker's name is written only when it changes, so a run of short lines from one
+person does not become a wall of headings.
+
+**Three decisions worth knowing:**
+
+*The file is written by the local service, not the extension.* A browser extension
+cannot write to a folder of your choosing — the best it could do is drop a file in
+Downloads, and it cannot append. The companion is already running on the same
+machine, so it does the writing and tells the panel where the file is. **No
+transcript is saved while the companion is not running**, and the panel's bottom line
+says so.
+
+*It writes every 60 seconds, not every 3–5 minutes.* The interval is really a
+data-loss window: close the tab and you lose whatever has not been written yet. The
+write itself is a local request appending a few lines and costs nothing, so there is
+no reason to make that window larger than it has to be. It also writes when captions
+are switched off, when the tab is closed, and whenever you press **save**.
+
+*A line is written ~20 seconds after it is spoken.* Live captions rewrite themselves
+for a few seconds after they first appear, and the translation arrives a second or
+two after that. Waiting for a line to settle is what lets the file be pure
+append — nothing already written ever has to be corrected. You are reading this file
+after the meeting, so the delay costs nothing.
+
+> **The transcript is meeting content on disk, in clear text.** Everything said in
+> every meeting accumulates in that folder. Know that before you turn it loose on
+> anything confidential, and set `TRANSCRIPT_ENABLED=false` if you would rather it
+> did not.
+
+### Tests
+
+```bash
+pip install quickjs                             # for the extension tests
+python3 tests/test_panel.py                     # panel open/close, the write seal
+server/.venv/bin/python tests/test_transcript.py # the Markdown writer
+```
+
+`tests/test_panel.py` lifts the state machine **verbatim out of `content.js`** and
+runs it, rather than restating the logic — so it fails if the real code changes
+behaviour, instead of testing a copy of itself.
 
 ### Speaker colours
 

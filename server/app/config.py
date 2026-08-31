@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     timeout_seconds: float = 20.0
     cache_size: int = 2000
 
+    # --- transcripts ---
+    # Conversations are appended to a Markdown file so a meeting can be re-read
+    # afterwards. The extension cannot write to an arbitrary path from inside the
+    # browser, so this service does it — see transcript.py.
+    #
+    # A home-directory folder rather than one beside the code: people need to FIND
+    # these files, and "next to the checkout" is not somewhere anyone looks.
+    transcript_enabled: bool = True
+    transcript_dir: str = "~/teams-captions"
+
     # --- server ---
     host: str = "127.0.0.1"
     port: int = 8100

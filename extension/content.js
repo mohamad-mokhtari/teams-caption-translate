@@ -30,6 +30,17 @@
   // top frame draws the panel; child frames capture and post their findings up.
   const IS_TOP = window.top === window;
 
+  /**
+   * Every repeating timer, so they can all be stopped at once.
+   *
+   * The extension never needs this — it loads once per page. The console build
+   * does: pasting the script a second time must replace the first instance, and
+   * an interval nobody kept a handle to cannot be stopped, so the old copy keeps
+   * polling and translating alongside the new one.
+   */
+  const timers = [];
+  const every = (fn, ms) => { const t = setInterval(fn, ms); timers.push(t); return t; };
+
   const SETTLE_MS = 700;   // no change for this long => the line is final
   const MAX_ROWS  = 200;
 
@@ -40,6 +51,37 @@
   const SERVER = "http://127.0.0.1:8100";
   const CONTEXT_N = 3;     // preceding segments sent so pronouns resolve
 
+  /**
+   * Saving the meeting to a Markdown file.
+   *
+   * FLUSH_MS is 60s, not the 3-5 minutes that first suggested itself. The flush is
+   * a POST to a service on this same machine appending a few lines — it costs
+   * nothing — and the interval is really a data-loss window: close the tab and you
+   * lose whatever has not been written. A minute of a meeting is a tolerable loss;
+   * five is not.
+   *
+   * SEAL_MS is the reason the file can be append-only. Live captions rewrite
+   * themselves for a few seconds after they first appear, and translations arrive
+   * a second or two after that. Writing a segment immediately would mean going
+   * back to correct lines already on disk — rewriting the whole file on every
+   * flush. Waiting 20 seconds instead costs nothing: you read this file after the
+   * meeting, not during it.
+   */
+  const FLUSH_MS = 60000;
+  const SEAL_MS  = 20000;
+  const FLUSH_MAX = 200;   // segments per request; keepalive bodies are capped at 64KB
+
+  /** Session id doubles as the filename stem, so it stays within [A-Za-z0-9_-].
+   *  Time-first so the folder sorts chronologically; the random tail keeps two
+   *  meetings started in the same minute apart. */
+  const SESSION = (() => {
+    const d = new Date(), p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+         + `_${p(d.getHours())}${p(d.getMinutes())}`
+         + `_${Math.random().toString(36).slice(2, 6)}`;
+  })();
+  const STARTED_AT = new Date().toLocaleString();
+
   const server = {
     ok: false,
     rtl: false,
@@ -47,7 +89,11 @@
     lastError: "",
     inflight: 0,
     lastMs: 0,
+    transcripts: false,   // does the companion save transcripts?
   };
+
+  /** Where the meeting is being written, and whether the last write worked. */
+  const saved = { dir: "", path: "", at: 0, error: "" };
 
   /** Recent English segments, for context. Kept short — the point is resolving
    *  "he"/"it"/"that", not summarising the meeting. */
@@ -135,6 +181,7 @@
   // a silent failure that cost an afternoon. One file, one thing to go wrong.
   const style = document.createElement("style");
   style.textContent = "#mct-panel {\n  position: fixed;\n  right: 16px;\n  bottom: 16px;\n  width: 380px;\n  max-height: 55vh;\n  display: flex;\n  flex-direction: column;\n  background: #14161c;\n  color: #e8e8ea;\n  border: 1px solid #2a2f3a;\n  border-radius: 10px;\n  font: 13px/1.5 ui-sans-serif, system-ui, sans-serif;\n  z-index: 2147483647;          /* above the page's own overlays */\n  box-shadow: 0 8px 28px rgba(0,0,0,.45);\n}\n#mct-head {\n  display: flex; align-items: center; gap: 8px;\n  padding: 8px 10px; border-bottom: 1px solid #2a2f3a;\n  font-weight: 600; cursor: move; user-select: none;\n}\n#mct-dot { width: 8px; height: 8px; border-radius: 50%; background: #6b7280; }\n#mct-dot.live { background: #34d399; }\n#mct-head .sp { flex: 1; }\n#mct-head button {\n  background: #232833; color: #e8e8ea; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 12px; cursor: pointer;\n}\n#mct-log { overflow-y: auto; padding: 8px 10px; }\n.mct-seg { margin-bottom: 8px; }\n.mct-spk { color: #818cf8; font-weight: 600; font-size: 12px; }\n.mct-txt { white-space: pre-wrap; word-break: break-word; }\n.mct-live { opacity: .55; font-style: italic; }   /* still changing */\n.mct-meta { color: #7b8194; font-size: 11px; padding: 6px 10px; border-top: 1px solid #2a2f3a; }\n#mct-picking * { outline: 2px dashed #f59e0b !important; cursor: crosshair !important; }\n\n\n/* Translation lane. Persian, Arabic and Hebrew render right-to-left; without dir\n   the output is technically correct and practically unreadable. Tahoma is a safe\n   Persian face on Windows, which is what most of the team uses. */\n.mct-tr {\n  margin-top: 2px;\n  padding-left: 8px;\n  border-left: 2px solid #34d399;\n  color: #d7f5e6;\n}\n.mct-tr:empty { display: none; }\n.mct-tr.rtl {\n  direction: rtl;\n  text-align: right;\n  padding-left: 0;\n  padding-right: 8px;\n  border-left: 0;\n  border-right: 2px solid #34d399;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.err { color: #f87171; border-color: #f87171; font-style: italic; font-size: 12px; }\n.mct-lat { font-size: 10px; color: #6b7280; margin-top: 1px; }\n.mct-lat:empty { display: none; }\n#mct-dot.warn { background: #f59e0b; }\n\n\n/* --- resizing ------------------------------------------------------------\n   Default small so it does not cover the meeting; maximised when you actually\n   need to read along. The native resize handle covers everything in between. */\n#mct-panel { resize: both; overflow: hidden; min-width: 260px; min-height: 120px; }\n#mct-panel.max { width: 620px; max-height: 82vh; }\n\n/* --- tabs ---------------------------------------------------------------- */\n.mct-tab {\n  font-size: 12px; font-weight: 600; padding: .1rem .5rem;\n  border-radius: 6px; cursor: pointer; color: var(--muted, #9096a3);\n}\n.mct-tab.on { background: #232833; color: #e8e8ea; }\n\n/* --- speaker chips: colour key and filter -------------------------------- */\n#mct-speakers {\n  display: flex; flex-wrap: wrap; gap: 4px;\n  padding: 6px 10px 0; max-height: 4.5rem; overflow-y: auto;\n}\n#mct-speakers:empty { display: none; }\n.mct-chip {\n  font-size: 11px; font-weight: 600; padding: .05rem .45rem;\n  border: 1px solid #333a49; border-radius: 20px;\n  cursor: pointer; white-space: nowrap; opacity: .65;\n}\n.mct-chip:hover { opacity: 1; }\n.mct-chip.on { opacity: 1; background: rgba(255,255,255,.07); }\n\n/* --- summary view -------------------------------------------------------- */\n#mct-summary { display: none; padding: 8px 10px; overflow-y: auto; flex: 1; }\n.mct-srow { display: flex; gap: 6px; margin-bottom: 8px; }\n.mct-srow select {\n  flex: 1; background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px; padding: .25rem; font: inherit; font-size: 12px;\n}\n.mct-sum-out { white-space: pre-wrap; word-break: break-word; line-height: 1.6; }\n.mct-sum-out.rtl {\n  direction: rtl; text-align: right;\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", sans-serif; font-size: 14px;\n}\n.mct-sum-out.err { color: #f87171; font-style: italic; }\n\n\n/* --- layout ---------------------------------------------------------------\n   The panel is a flex column. Without an explicit flex on the scrolling areas,\n   the browser sizes them from content: the log stops growing into the space it\n   has, and the chip row gets clipped mid-row so the bottom line of chips is cut\n   in half. min-height:0 is required for a flex child to be allowed to shrink\n   below its content size and scroll instead of overflowing. */\n#mct-log      { flex: 1 1 auto; min-height: 0; }\n#mct-summary  { flex: 1 1 auto; min-height: 0; flex-direction: column; }\n#mct-head     { flex: 0 0 auto; flex-wrap: wrap; }\n.mct-meta     { flex: 0 0 auto; }\n\n/* Chips wrap freely rather than scrolling inside a fixed height \u2014 a scrollable\n   box cut rows in half, which is what looked broken. */\n#mct-speakers {\n  flex: 0 0 auto;\n  max-height: none;\n  overflow: visible;\n  padding-bottom: 6px;\n}\n.mct-chip { line-height: 1.5; }\n\n\n/* Launcher pill, shown while the panel is closed. Deliberately small and dim: it\n   is a way back in, not something to look at during a meeting. */\n#mct-launcher {\n  position: fixed; right: 16px; bottom: 16px;\n  display: none;\n  background: #14161c; color: #9096a3;\n  border: 1px solid #2a2f3a; border-radius: 20px;\n  padding: .3rem .8rem;\n  font: 12px/1.4 ui-sans-serif, system-ui, sans-serif;\n  cursor: pointer; z-index: 2147483647;\n  box-shadow: 0 4px 14px rgba(0,0,0,.35);\n}\n#mct-launcher:hover { color: #e8e8ea; border-color: #3b4252; }\n\n#mct-close { color: #f87171; }\n";
+  style.textContent += "\n\n/* Empty state. Opening the panel before anyone has spoken used to show a blank\n   box, which reads as broken rather than as ready. */\n#mct-log:empty::before {\n  content: \"Waiting for captions\u2026  Turn on live captions in Teams and start speaking.\";\n  display: block;\n  color: #7b8194;\n  font-style: italic;\n  padding: 10px 0;\n}\n\n/* Where the transcript is being written. Small, and directly under the status\n   line, because the question it answers (\"where is my file?\") is asked once and\n   then never again. */\n#mct-file {\n  flex: 0 0 auto;\n  padding: 0 10px 7px;\n  font-size: 11px;\n  color: #6b7280;\n  cursor: pointer;\n  word-break: break-all;\n}\n#mct-file:hover { color: #9096a3; }\n#mct-file:empty { display: none; }\n#mct-file.err { color: #f59e0b; cursor: default; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -168,6 +215,7 @@
       el("button", { id: "mct-dump",  text: "dump" }),
       el("button", { id: "mct-retry", text: "reconnect" }),
       el("button", { id: "mct-copy",  text: "copy" }),
+      el("button", { id: "mct-save",  text: "save", title: "write the transcript now" }),
       el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
       el("button", { id: "mct-close", text: "\u00d7", title: "close" }),
@@ -189,6 +237,7 @@
     ]),
 
     el("div", { id: "mct-meta", cls: "mct-meta", text: "looking for captions\u2026" }),
+    el("div", { id: "mct-file" }),
   ]);
   /**
    * Small pill shown while the panel is closed.
@@ -207,11 +256,25 @@
    * discard what was said.
    */
   let panelOpen = false;
-  let userClosed = false;      // an explicit close must not be undone by the poller
+
+  /**
+   * Who last decided the panel should be open: nobody, or the user.
+   *
+   * The first version tracked only "the user closed it". Opening it from the
+   * launcher therefore left no trace, so the one-second poller saw a panel open
+   * with no captions on screen and shut it again — the panel flashed open and
+   * vanished, which is exactly the bug this replaces. Both directions of an
+   * explicit choice have to be recorded, not just one.
+   *
+   *   null      follow the captions
+   *   "open"    the user asked for it; the poller must not close it
+   *   "closed"  the user dismissed it; the poller must not reopen it
+   */
+  let override = null;
 
   function setPanelOpen(open, byUser = false) {
     panelOpen = open;
-    if (byUser) userClosed = !open;
+    if (byUser) override = open ? "open" : "closed";
     panel.style.display    = open ? "flex" : "none";
     launcher.style.display = open ? "none" : "block";
     if (open) $log.scrollTop = $log.scrollHeight;
@@ -226,7 +289,7 @@
     setPanelOpen(false);          // stays closed until captions appear
     // Teams is a single-page app and re-renders large parts of the DOM; if it
     // removes our node, put it back.
-    setInterval(() => {
+    every(() => {
       const host2 = document.body || document.documentElement;
       if (!panel.isConnected) host2.appendChild(panel);
       if (!launcher.isConnected) host2.appendChild(launcher);
@@ -237,13 +300,23 @@
 
   const $log  = panel.querySelector("#mct-log");
   const $meta = panel.querySelector("#mct-meta");
+  const $file = panel.querySelector("#mct-file");
   const $dot   = panel.querySelector("#mct-dot");
   const $chips = panel.querySelector("#mct-speakers");
   const $sum   = panel.querySelector("#mct-summary");
   const $sumWho = panel.querySelector("#mct-sum-who");
   const $sumOut = panel.querySelector("#mct-sum-out");
 
-  const transcript = [];   // in memory only; nothing is persisted
+  /**
+   * Every settled segment, in order.
+   *
+   * Each record is {id, key, t, firstSeen, speaker, text, translation, saved}.
+   * `id` is a plain counter rather than the caption key: Teams reuses caption
+   * slots, so `key` repeats within a meeting and cannot identify a line in a file.
+   * `saved` is what makes the file append-only — see flushTranscript.
+   */
+  const transcript = [];
+  let segNo = 0;
 
   function meta(msg) { state.metaMsg = msg; paintStatus(); }
 
@@ -347,6 +420,13 @@
   }
 
   function renderTranslation(key, text, error = "", latency = "") {
+    // The transcript file wants the translation next to the original, and this is
+    // the only place it arrives. Errors are not recorded: a line with no
+    // translation is honest, one with "translator offline" written under it is not.
+    if (!error && text) {
+      const rec = transcript.findLast?.(r => r.key === key && !r.saved);
+      if (rec) rec.translation = text;
+    }
     const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (!row) return;
     const tr = row.querySelector(".mct-tr");
@@ -359,12 +439,19 @@
   /** A segment stopped changing: record it, and ask for a translation. */
   function emit(key, speaker, text, revised = false) {
     if (!revised) state.emitted++;
+    const record = () => transcript.push({
+      id: String(++segNo), key, t: new Date().toISOString(),
+      firstSeen: Date.now(), speaker, text, translation: "", saved: false,
+    });
     if (revised) {
-      const last = transcript.findLast?.(r => r.key === key);
+      // Only a record still on this side of the seal may be revised in place. One
+      // already written to disk must not be silently edited in memory, or the panel
+      // and the file would disagree with no way to tell which is right.
+      const last = transcript.findLast?.(r => r.key === key && !r.saved);
       if (last) { last.text = text; last.revised = true; }
-      else transcript.push({ key, t: new Date().toISOString(), speaker, text });
+      else record();
     } else {
-      transcript.push({ key, t: new Date().toISOString(), speaker, text });
+      record();
     }
     render(key, speaker, text, true);
     console.log(`[caption]${revised ? " (revised)" : ""}`, speaker ? speaker + ":" : "", text);
@@ -403,8 +490,14 @@
       server.ok = true;
       server.rtl = !!cfg.rtl;
       server.lang = cfg.target_lang_name || cfg.target_lang || "";
+      server.transcripts = !!cfg.transcript_enabled;
+      // Shown before anything has been written, so the folder is discoverable from
+      // the moment the panel opens rather than only after the first flush.
+      if (cfg.transcript_dir) saved.dir = cfg.transcript_dir;
       server.lastError = "";
-      console.log("[caption] translator ready:", server.lang, server.rtl ? "(RTL)" : "");
+      paintFile();
+      console.log("[caption] translator ready:", server.lang, server.rtl ? "(RTL)" : "",
+                  server.transcripts ? `| saving to ${saved.dir}` : "| not saving");
     } catch (e) {
       server.ok = false;
       server.lastError = `translator offline at ${SERVER}`;
@@ -452,6 +545,104 @@
       server.inflight--;
       paintStatus();
     }
+  }
+
+  // ---------- saving the transcript ----------------------------------------
+
+  /**
+   * A segment is written once it is *sealed*: it stopped changing long enough ago
+   * that no revision and no translation is still coming for it. That is what lets
+   * the file be pure append — nothing already on disk ever needs correcting.
+   *
+   * `force` ignores the seal. Used when the meeting ends or the tab is closing,
+   * where losing the last few lines is worse than the small chance of writing one
+   * before its translation lands.
+   */
+  function unsaved(force) {
+    const now = Date.now();
+    return transcript
+      .filter(r => !r.saved && (force || now - r.firstSeen >= SEAL_MS))
+      .slice(0, FLUSH_MAX);
+  }
+
+  async function flushTranscript(force = false) {
+    // Only the top frame writes. content.js runs in every frame, and each frame
+    // has its own SESSION — without this, an iframe that also sees captions would
+    // start a second file for the same meeting.
+    if (!IS_TOP || !server.transcripts) return;
+
+    const batch = unsaved(force);
+    if (!batch.length) {
+      // Nothing outstanding means an earlier failure has since been made good, so
+      // the warning must go — a stale "not saved" is worse than no message at all.
+      if (!transcript.some(r => !r.saved)) saved.error = "";
+      paintFile();
+      return;
+    }
+
+    try {
+      const r = await fetch(`${SERVER}/transcript`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        // Survives the page being closed, which is exactly when the last flush
+        // happens. A plain fetch is cancelled on unload and the tail is lost.
+        keepalive: true,
+        body: JSON.stringify({
+          session: SESSION,
+          started_at: STARTED_AT,
+          segments: batch.map(r2 => ({
+            id: r2.id, t: r2.t, speaker: r2.speaker,
+            text: r2.text, translation: r2.translation,
+          })),
+        }),
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+
+      for (const r2 of batch) r2.saved = true;
+      saved.path = d.path;
+      saved.dir = d.directory || saved.dir;
+      saved.at = Date.now();
+      saved.error = "";
+    } catch (e) {
+      // Leave the batch unsaved so the next flush retries it. Retrying cannot
+      // duplicate: the service skips segment ids it has already written.
+      saved.error = e.message || "could not save";
+    }
+    paintFile();
+  }
+
+  /** One line under the status, answering "where is my meeting being written?" */
+  function paintFile() {
+    if (!IS_TOP) return;
+    if (!server.transcripts) { $file.textContent = ""; return; }
+
+    if (saved.error) {
+      $file.className = "err";
+      $file.textContent = `not saved — ${saved.error}`;
+      $file.title = "";
+      return;
+    }
+    const where = saved.path || (saved.dir ? `${saved.dir}/${SESSION}.md` : "");
+    if (!where) { $file.textContent = ""; return; }
+
+    const waiting = transcript.filter(r => !r.saved).length;
+    $file.className = "";
+    $file.textContent = `\u{1F4C4} ${where}${waiting ? ` · ${waiting} not yet written` : ""}`;
+    $file.title = "click to copy this path";
+  }
+
+  if (IS_TOP) {
+    every(() => flushTranscript(), FLUSH_MS);
+
+    // Closing the tab is the most likely way to lose the tail of a meeting, and
+    // pagehide is the last event that reliably fires for it. visibilitychange
+    // covers the case where the browser is killed without ever firing pagehide.
+    addEventListener("pagehide", () => flushTranscript(true));
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushTranscript(true);
+    });
   }
 
   // ---------- reading the caption DOM -------------------------------------
@@ -663,26 +854,26 @@
    * fails silently, which looks exactly like "captions stopped working".
    */
   let tries = 0;
-  setInterval(() => {
+  let captionsWere = false;   // previous poll, so we can act on the change, not the state
+  every(() => {
     tries++;
 
     // Are captions on screen right now?
     const captionsOn = deepQueryAll(TEXT_SEL).some(e => !isOurs(e));
 
-    if (captionsOn) {
-      // Turning captions on reopens the panel — unless it was closed by hand,
-      // in which case leave it closed and let the launcher pill offer the way back.
-      if (!panelOpen && !userClosed) setPanelOpen(true);
-    } else if (panelOpen) {
-      // Captions switched off: put the panel away, but keep everything it holds.
-      setPanelOpen(false);
-      // An explicit close applies to this caption session only. Once captions go
-      // away, the next time they come on the panel should open again — otherwise
-      // closing it once silently disables the tool for the rest of the day.
-      userClosed = false;
-    } else {
-      userClosed = false;
+    if (captionsOn !== captionsWere) {
+      // Captions were switched on or off. That is a change in the world, so the
+      // user's earlier override no longer applies and automatic behaviour resumes.
+      // Without this, dismissing the panel once would silently disable the tool
+      // for the rest of the day and nobody would know why it stopped appearing.
+      captionsWere = captionsOn;
+      override = null;
+      if (!captionsOn) flushTranscript(true);   // a caption session just ended
     }
+
+    // Follow the captions unless the user has said otherwise.
+    const shouldBeOpen = override ? override === "open" : captionsOn;
+    if (shouldBeOpen !== panelOpen) setPanelOpen(shouldBeOpen);
 
     if (state.container) {
       // Still attached to something that is still in the page and still holds
@@ -830,6 +1021,26 @@
 
   panel.querySelector("#mct-close").onclick = () => setPanelOpen(false, /*byUser=*/true);
 
+  // Forces a write, seal and all. The timer handles the normal case; this is for
+  // when you are about to close the laptop and want to be sure.
+  panel.querySelector("#mct-save").onclick = async () => {
+    if (!server.transcripts) { meta("the companion is not saving transcripts"); return; }
+    const n = transcript.filter(r => !r.saved).length;
+    await flushTranscript(true);
+    meta(saved.error ? `could not save — ${saved.error}` : `wrote ${n} segments`);
+  };
+
+  // The path is long and unselectable inside a panel you cannot easily highlight
+  // in, so clicking it copies rather than trying to make it selectable.
+  $file.onclick = () => {
+    const path = saved.path || (saved.dir ? `${saved.dir}/${SESSION}.md` : "");
+    if (!path) return;
+    navigator.clipboard.writeText(path).then(
+      () => meta("transcript path copied"),
+      () => meta(path),
+    );
+  };
+
   panel.querySelector("#mct-retry").onclick = () => {
     meta("reconnecting to translator…");
     loadConfig();
@@ -894,7 +1105,7 @@
   loadConfig();
   // The companion is a separate process the user starts by hand; poll until it
   // appears rather than making them reload the page.
-  setInterval(() => { if (!server.ok) loadConfig(); }, 15000);
+  every(() => { if (!server.ok) loadConfig(); }, 15000);
 
   console.log(
     "[caption] loaded |", IS_TOP ? "TOP frame" : "iframe:" + location.href.slice(0, 80),

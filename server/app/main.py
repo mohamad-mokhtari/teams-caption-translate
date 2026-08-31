@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from .config import settings
 from .providers import ProviderError
+from .transcript import TranscriptError, append as append_transcript, directory as transcript_dir
 from .translate import stats, summarize_speaker, translate
 
 app = FastAPI(title="Caption Translator", version="1.0.0")
@@ -87,6 +88,10 @@ async def config():
         "rtl": settings.target_lang in {"fa", "ar", "he", "ur", "ps", "sd"},
         "provider": settings.provider,
         "context_segments": settings.context_segments,
+        "transcript_enabled": settings.transcript_enabled,
+        # Shown in the panel so people know where their meeting is being written,
+        # before a file exists to point at.
+        "transcript_dir": str(transcript_dir()),
     }
 
 
@@ -150,3 +155,48 @@ async def do_summarize(req: SummaryIn):
         stats["errors"] += 1
         return SummaryOut(summary="", segments=len(req.segments), ms=0.0,
                           provider=req.provider or settings.provider, error=str(e))
+
+
+class Segment(BaseModel):
+    id: str = Field(description="Stable per-segment id; a repeat is ignored, not duplicated")
+    t: str = ""                          # ISO timestamp
+    speaker: str = ""
+    text: str = ""
+    translation: str = ""
+
+
+class TranscriptIn(BaseModel):
+    session: str = Field(description="Filename stem: [A-Za-z0-9_-], validated server-side")
+    started_at: str = ""
+    segments: list[Segment] = Field(default_factory=list)
+
+
+class TranscriptOut(BaseModel):
+    path: str = ""
+    directory: str = ""
+    written: int = 0
+    total: int = 0
+    bytes: int = 0
+    error: str | None = None
+
+
+@app.post("/transcript", response_model=TranscriptOut)
+def save_transcript(req: TranscriptIn):
+    """
+    Append settled segments to this session's Markdown file.
+
+    Deliberately `def`, not `async def`: it does blocking file IO, and FastAPI runs
+    a sync endpoint in a threadpool. As `async def` it would stall the event loop
+    and hold up the translations that are actually latency-sensitive.
+
+    Errors come back as a 200 with `error` set, matching /translate — a transcript
+    that cannot be written must never interrupt the caption stream.
+    """
+    try:
+        return TranscriptOut(**append_transcript(
+            req.session, req.started_at, [s.model_dump() for s in req.segments]))
+    except TranscriptError as e:
+        return TranscriptOut(error=str(e), directory=str(transcript_dir()))
+    except OSError as e:
+        return TranscriptOut(error=f"cannot write transcript: {e}",
+                             directory=str(transcript_dir()))
