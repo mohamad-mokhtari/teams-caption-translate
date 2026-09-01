@@ -400,19 +400,33 @@ Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person.
    ... one row, retranslated in full, every few seconds
 ```
 
-So a finished sentence becomes its own row, and is never touched again:
+So finished text is committed to rows — **grouped**, not one row per full stop:
 
 ```
-Hello, everyone.                        → translated once
-Uh, my name is Mohammad.                → translated once
-And let's stay to join other person.    → translated once
+Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person
+to this meeting.                                              → translated once
+Other sentence. Uh, after stop and speed again.               → translated once
 ```
+
+Sentences are gathered until a row holds about a line of text, breaking only at a
+sentence end. Splitting at every full stop was technically correct and horrible to
+read — *"Of course. I can help you. And maybe you can help me."* became three rows,
+each a clause on its own. It also translated worse: *"Of course."* alone gives the
+model nothing to work from, and the right Persian for it depends on what follows.
+
+A finished sentence too short to be worth a row **waits**. Half a second of silence
+is somebody thinking; two seconds is a real stop.
 
 What you have already read stays read. Abbreviations, initials and decimals are not
 mistaken for sentence ends (`Dr.`, `e.g.`, `3.5`). An unfinished tail is shown greyed
 and is only committed once the speaker has actually stopped.
 
-**Rows are keyed by the sentence's position in the line, not by its text.** That is
+**A committed row is never re-cut.** Rows are tracked by where they end in the
+line, so text arriving later starts a new row instead of quietly extending one you
+have already read. The words inside a row can still be rewritten if the recogniser
+revises them — boundaries are fixed, contents are not.
+
+**Rows are keyed by position, not by text.** That is
 what keeps this safe: live recognition revises itself across a full stop it has
 already produced — *"Good morning everyone."* becomes *"Good morning everyone, thanks
 for joining."* a second later. Positional keys mean sentence 0 stays sentence 0 and

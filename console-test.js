@@ -83,6 +83,43 @@
    * A finished sentence never changes again, so translating those individually
    * makes the translation stable: what has been read stays read.
    */
+  /**
+   * How much text a row should hold before it is worth committing.
+   *
+   * Splitting at every full stop is technically correct and horrible to read:
+   * "Of course. I can help you. And maybe you can help me." became three rows,
+   * each a clause on its own. It also translates worse — "Of course." on its own
+   * gives the model nothing to work with, and the Persian for it depends entirely
+   * on what follows.
+   *
+   * So sentences are grouped until a row holds roughly a line of text, and the
+   * grouping only ever breaks at a sentence end. Short exchanges stay whole; a
+   * monologue is still broken up rather than growing without limit.
+   */
+  const MIN_ROW_CHARS = 80;
+
+  /**
+   * Gather finished sentences into rows of a readable size.
+   *
+   * Greedy from the start, which is what keeps row boundaries stable as more
+   * speech arrives: the same run of sentences always groups the same way, so
+   * row 0 stays row 0 and is never re-cut under a reader.
+   */
+  function chunkSentences(sentences) {
+    const rows = [];
+    let buf = [];
+    const join = (xs) => xs.map(x => x.text).join(" ");
+    for (const one of sentences) {
+      buf.push(one);
+      if (join(buf).length >= MIN_ROW_CHARS) {
+        rows.push({ text: join(buf), end: buf[buf.length - 1].end });
+        buf = [];
+      }
+    }
+    // What is left is finished, but too short to be worth a row of its own yet.
+    return { rows, leftover: buf.length ? join(buf) : "" };
+  }
+
   function splitSentences(text) {
     const complete = [];
     let start = 0;
@@ -101,7 +138,10 @@
       // Must be the end of a word, not "3.5" caught between digits.
       if (end < text.length && text[end] !== " ") continue;
 
-      complete.push(candidate);
+      // The offset matters as much as the text: rows are committed by position in
+      // the line, and reconstructing that from the words would go wrong the first
+      // time whitespace differed.
+      complete.push({ text: candidate, end });
       start = end;
       i = end - 1;
     }
@@ -1473,14 +1513,33 @@
       // Showing the whole line would put the growing paragraph back on screen.
       // Only the part that has not become a sentence yet is shown as still being
       // said. Showing the whole line would put the growing paragraph back.
-      const { rest: saying } = PLATFORM.split ? splitSentences(text) : { rest: text };
+      // Everything not yet committed to a row, so the greyed line shows what is
+      // actually outstanding rather than only the half-finished sentence.
+      const uncommitted = (prev && text.startsWith(prev.committed))
+        ? text.slice(prev.committed.length) : text;
+      let saying = uncommitted;
+      if (PLATFORM.split) {
+        const { complete, rest: tail } = splitSentences(uncommitted);
+        const { leftover } = chunkSentences(complete);
+        saying = [leftover, tail].filter(Boolean).join(" ");
+      }
       render(key + "#live", speaker, saying, false);
 
-      // A line that has clearly finished is translated after the short window. One
-      // that has not is held: any further speech resets this timer, so a sentence
-      // being built up a few words at a time is translated once, at the end,
-      // instead of once per pause.
-      const wait = endsSentence(text) || !punctuates() ? SETTLE_MS : HOLD_MS;
+      /*
+       * A line that has clearly finished is translated after the short window. One
+       * that has not is held: any further speech resets this timer, so a sentence
+       * built up a few words at a time is translated once, at the end, instead of
+       * once per pause.
+       *
+       * A finished sentence too short to be worth a row also waits. "Of course."
+       * ends cleanly, but committing it on a half-second pause means translating
+       * it alone -- with nothing for the model to work from -- and then rewriting
+       * the row when "I can help you" arrives a moment later. Two seconds of
+       * silence is a real stop; half a second is somebody thinking.
+       */
+      const shortSoFar = PLATFORM.split && saying.length < MIN_ROW_CHARS;
+      const wait = (!shortSoFar && (endsSentence(text) || !punctuates()))
+        ? SETTLE_MS : HOLD_MS;
 
       const timer = setTimeout(() => {
         const cur = state.pending.get(key);
@@ -1492,54 +1551,73 @@
         if (punctHistory.length > 40) punctHistory.shift();
 
         /*
-         * Split the whole line into sentences, and give each one a row keyed by
-         * its position.
+         * Commit finished text to rows, and never re-cut a row once committed.
          *
-         * Keying by position is what makes this safe. Live recognition revises
-         * itself, including across a full stop it has already produced: "Good
-         * morning everyone." becomes "Good morning everyone, thanks for joining."
-         * a second later. Treating a finished sentence as immutable turned that
-         * into two rows, the second of them the fragment ", thanks for joining."
+         * Rows are tracked by where they END in the line, not by their words.
+         * That is what holds the two properties together: a committed row can be
+         * rewritten if the recogniser revises the words inside it, but its
+         * boundaries never move, so text that arrives later starts a new row
+         * instead of quietly extending one somebody has already read.
          *
-         * With positional keys, sentence 0 stays sentence 0 and its row is
-         * rewritten in place -- exactly what happened before sentences existed --
-         * while sentences the speaker has moved past are simply never touched
-         * again. Unchanged ones are skipped, so nothing is retranslated and the
-         * growing-paragraph problem stays fixed.
+         * Deriving the boundary from the words instead would go wrong the first
+         * time whitespace differed, and re-derive every row on every caption.
          */
-        // A platform that already breaks its captions well keeps one row per
-        // line. Positional keys still apply, so a revision rewrites that row
-        // rather than adding another.
-        const { complete, rest } = PLATFORM.split
-          ? splitSentences(cur.text)
-          : (endsSentence(cur.text) ? { complete: [cur.text], rest: "" }
-                                    : { complete: [], rest: cur.text });
+        const full = cur.text;
 
-        // An unfinished tail is committed only once the speaker has actually
-        // stopped, which is what the longer settle window means.
-        const stopped = !endsSentence(cur.text) && rest;
-        const parts = stopped ? [...complete, rest] : complete;
-
-        for (let i = 0; i < parts.length; i++) {
-          if (cur.sent[i] === parts[i]) continue;      // unchanged: leave it alone
-          const had = cur.sent[i] !== undefined;
-          emit(`${key}#${i}`, cur.speaker, parts[i], had);
-          cur.sent[i] = parts[i];
+        if (!full.startsWith(cur.committed)) {
+          // The recogniser went back and changed something already committed.
+          // Withdraw the rows that reach past the point where the two still agree
+          // and let them be rebuilt -- that is what turns "Good morning everyone."
+          // becoming "Good morning everyone, thanks for joining." into a rewrite
+          // rather than a row holding the fragment ", thanks for joining."
+          let i = 0;
+          while (i < full.length && i < cur.committed.length && full[i] === cur.committed[i]) i++;
+          while (cur.ends.length && cur.ends[cur.ends.length - 1] > i) {
+            cur.ends.pop();
+            dropSegment(`${key}#${cur.ends.length}`);
+          }
+          cur.committed = full.slice(0, cur.ends[cur.ends.length - 1] || 0);
         }
 
-        // A revision can merge two sentences back into one. Drop what is left over
-        // rather than leaving an orphan row and an orphan line in the transcript.
-        for (let i = parts.length; i < cur.sent.length; i++) dropSegment(`${key}#${i}`);
-        cur.sent.length = parts.length;
+        const base = cur.committed.length;
+        const tail = full.slice(base);
 
-        // The still-being-said line belongs at the bottom, after the sentences.
+        const { complete, rest } = PLATFORM.split
+          ? splitSentences(tail)
+          : (endsSentence(tail) ? { complete: [{ text: tail, end: tail.length }], rest: "" }
+                                : { complete: [], rest: tail });
+
+        const { rows: ready, leftover } = PLATFORM.split
+          ? chunkSentences(complete)
+          : { rows: complete, leftover: "" };
+
+        // Finished, but not yet enough to be worth a row -- plus whatever is still
+        // being said.
+        const pendingText = [leftover, rest].filter(Boolean).join(" ");
+
+        // Committed once the speaker has actually stopped, which is what the
+        // longer of the two settle windows means, rather than being held back
+        // waiting for a length it may never reach.
+        const stopped = !!pendingText;
+
+        const commit = (text, end) => {
+          emit(`${key}#${cur.ends.length}`, cur.speaker, text);
+          cur.ends.push(end);
+          cur.committed = full.slice(0, end);
+        };
+
+        for (const row of ready) commit(row.text, base + row.end);
+        if (stopped) commit(pendingText, full.length);
+
+        // The still-being-said line belongs at the bottom, after the rows.
         removeRow(key + "#live");
-        if (!stopped && rest) render(key + "#live", cur.speaker, rest, false);
+        if (!stopped && pendingText) render(key + "#live", cur.speaker, pendingText, false);
       }, wait);
 
       state.pending.set(key, {
         speaker, text, timer,
-        sent: prev?.sent || [],   // the text of each sentence already emitted
+        committed: prev?.committed || "",  // the part of this line already in rows
+        ends: prev?.ends || [],            // where each committed row ends in the line
       });
     });
   }

@@ -201,11 +201,13 @@ def test_scroll() -> None:
 
 def test_wait() -> None:
     logic = lift("  const SENTENCE_END =", "\n  // The translation companion")
-    line = lift("      const wait = endsSentence", "\n\n      const timer")
+    line = lift("      const shortSoFar = PLATFORM.split", "\n\n      const timer")
 
     c = quickjs.Context()
-    c.eval("const SETTLE_MS = 700, HOLD_MS = 2000;\n" + logic
-           + "\nfunction waitFor(text) {" + line + "\n  return wait; }")
+    # Teams: no splitting, so the length of the pending text never enters into it.
+    c.eval("const SETTLE_MS = 700, HOLD_MS = 2000;\n"
+           "const PLATFORM = { split: false };\nlet saying = '';\n" + logic
+           + "\nfunction waitFor(text) { saying = text;" + line + "\n  return wait; }")
 
     print("Wait: a finished sentence goes straight out")
     check("'Can you hear me?'", c.eval('waitFor("Can you hear me?")'), 700)

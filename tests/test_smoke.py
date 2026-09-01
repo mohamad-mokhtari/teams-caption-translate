@@ -116,6 +116,9 @@ function meetRows() {
     speaker: r.querySelector(".mct-spk").textContent,
     text:    r.querySelector(".mct-txt").textContent,
     tr:      r.querySelector(".mct-tr").textContent,
+    // The greyed "still being said" line. Provisional by design, so it is not
+    // held to the promise that a row never changes.
+    live:    (r.getAttribute("data-k") || "").endsWith("#live"),
   }));
 }
 
@@ -220,6 +223,9 @@ function panelRows() {
     speaker: r.querySelector(".mct-spk").textContent,
     text:    r.querySelector(".mct-txt").textContent,
     tr:      r.querySelector(".mct-tr").textContent,
+    // The greyed "still being said" line. Provisional by design, so it is not
+    // held to the promise that a row never changes.
+    live:    (r.getAttribute("data-k") || "").endsWith("#live"),
   }));
 }
 """
@@ -829,6 +835,7 @@ def test_google_meet_capture():
     for t in said:
         c.eval(f'meetSay("Sarah", "{t}")')
         tick(c, 1500)
+    tick(c, 3000)          # the last one is only committed once the speaker stops
 
     got = json.loads(c.eval("JSON.stringify(meetRows())"))
     check("  every line captured", len(got), len(said))
@@ -875,29 +882,28 @@ def test_meet_appends_to_one_line():
         seen.append(json.loads(c.eval("JSON.stringify(meetRows())")))
 
     final = seen[-1]
-    check("  one sentence per row", [r["text"] for r in final], [
-        "Hello, everyone.",
-        "Uh, my name is Mohammad.",
-        "And let's stay to join other person.",
-        "Other sentence.",
-        "Uh, after stop and speed again.",
-    ])
+    # Grouped into readable rows, breaking only at sentence ends -- not one row
+    # per full stop, which read as a list of clauses.
+    check("  nothing lost", " ".join(r["text"] for r in final), growth[-1])
+    check("  broken at sentence ends only",
+          [r["text"] for r in final if not r["text"].rstrip().endswith((".", "?", "!"))], [])
 
     print("Smoke: and a finished sentence is never re-translated")
     # The whole point. Each snapshot's rows must be a prefix of the next: rows
     # only ever get added, never rewritten.
     for before, after in zip(seen, seen[1:]):
-        earlier = [(r["text"], r["tr"]) for r in before]
-        later = [(r["text"], r["tr"]) for r in after][:len(earlier)]
+        earlier = [(r["text"], r["tr"]) for r in before if not r["live"]]
+        later = [(r["text"], r["tr"]) for r in after if not r["live"]][:len(earlier)]
         check(f"  {len(earlier)} row(s) unchanged by the next growth", later, earlier)
 
-    print("Smoke: each sentence was translated exactly once")
+    print("Smoke: nothing is translated twice, and no text is re-sent as it grows")
     asked = json.loads(c.eval(
         "JSON.stringify(calls.filter(x => x.path === '/translate').map(x => x.body.text))"))
-    check("  no sentence sent twice", len(asked), len(set(asked)))
-    # The whole paragraph is never sent -- that was the bug.
-    check("  the growing paragraph was never sent",
-          [a for a in asked if a.count(".") > 1], [])
+    check("  nothing sent twice", len(asked), len(set(asked)))
+    # The bug was retranslating an ever-longer version of the same text. Rows may
+    # hold several sentences, but no row may be a longer version of an earlier one.
+    grew = [(a, b) for a in asked for b in asked if a != b and b.startswith(a)]
+    check("  no row re-sent as a longer version of itself", grew, [])
 
 
 
@@ -956,7 +962,10 @@ def test_meet_revision_across_a_full_stop():
     print("Smoke: Meet, a revision that merges two sentences into one")
     c.eval('meetSay("Reza", "I am done. Thanks.", "two")')
     tick(c, 2500)
-    check("  two rows", len(json.loads(c.eval("JSON.stringify(meetRows())"))), 3)
+    # Short, so the two sentences share a row -- see test_meet_rows_are_readable.
+    check("  grouped into one row",
+          [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))][1:],
+          ["I am done. Thanks."])
     c.eval('meetSay("Reza", "I am done thanking everybody.", "two")')
     tick(c, 2500)
     got = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
@@ -981,26 +990,26 @@ def test_meet_two_speakers():
     c.eval(SRC); tick(c, 200)
 
     # Exactly the shape a real call produced: one block per person, each appending.
-    c.eval('meetSay("mohamad mokhtari", "Hello, everyone.", "a")'); tick(c, 2500)
+    # 900ms between clauses: somebody talking, not somebody who has finished.
+    c.eval('meetSay("mohamad mokhtari", "Hello, everyone.", "a")'); tick(c, 900)
     c.eval('meetSay("mohamad mokhtari", "Hello, everyone. My name is Muhammad.", "a")')
-    tick(c, 2500)
-    c.eval('meetSay("You", "Second speaker.", "b")'); tick(c, 2500)
-    c.eval('meetSay("You", "Second speaker. That I am starting.", "b")'); tick(c, 2500)
+    tick(c, 900)
+    c.eval('meetSay("You", "Second speaker.", "b")'); tick(c, 900)
+    c.eval('meetSay("You", "Second speaker. That I am starting.", "b")')
+    tick(c, 3000)          # and now everyone stops
 
     got = json.loads(c.eval("JSON.stringify(meetRows())"))
     check("  both people named",
           [(r["speaker"], r["text"]) for r in got], [
-              ("mohamad mokhtari", "Hello, everyone."),
-              ("mohamad mokhtari", "My name is Muhammad."),
-              ("You", "Second speaker."),
-              ("You", "That I am starting."),
+              ("mohamad mokhtari", "Hello, everyone. My name is Muhammad."),
+              ("You", "Second speaker. That I am starting."),
           ])
 
     print("Smoke: and the speaker chips follow")
     chips = json.loads(c.eval(
         'JSON.stringify(document.querySelectorAll(".mct-chip").map(x => x.textContent))'))
     check("  a chip each, plus All", len(chips), 3)
-    check("  named", sorted(chips)[1:], ["You (2)", "mohamad mokhtari (2)"])
+    check("  named", sorted(chips)[1:], ["You (1)", "mohamad mokhtari (1)"])
 
     print("Smoke: the avatar image contributes no text to the name")
     # The name sits two levels below the speaker block, next to an <img>. Reading
@@ -1008,6 +1017,63 @@ def test_meet_two_speakers():
     check("  clean names", [r["speaker"] for r in got if r["speaker"].strip() != r["speaker"]], [])
 
 
+
+def test_meet_rows_are_readable():
+    """
+    Splitting at every full stop was correct and horrible to read.
+
+    "Of course. I can help you. And maybe you can help me." became three rows,
+    each a clause on its own -- and translated worse, because "Of course." alone
+    gives the model nothing to work from.
+    """
+    print("Smoke: short sentences stay together")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('location.hostname = "meet.google.com"; detectAnswer = {lang:"en", name:"English"};')
+    c.eval("buildMeetPage();")
+    c.eval(SRC); tick(c, 200)
+
+    # Someone talking, pausing to think between clauses -- not stopping.
+    for step in ["Of course.",
+                 "Of course. I can help you.",
+                 "Of course. I can help you. And maybe you can help me."]:
+        c.eval(f'meetSay("Sarah", {json.dumps(step)}, "a")')
+        tick(c, 900)
+    tick(c, 3000)          # now they actually stop
+
+    got = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
+    check("  one row, not three", got,
+          ["Of course. I can help you. And maybe you can help me."])
+    sent = json.loads(c.eval("JSON.stringify(calls.filter(x=>x.path==='/translate')"
+                             ".map(x=>x.body.text))"))
+    # A clause on its own gives the model nothing to work from, and committing it
+    # means rewriting the row a moment later when the rest arrives.
+    check("  never translated a bare clause", [x for x in sent if len(x) < 30], [])
+    check("  translated once", len(sent), 1)
+
+    print("Smoke: but a real stop does commit a short sentence")
+    c.eval('meetSay("Sarah", "Thanks.", "c")')
+    tick(c, 3000)
+    got = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
+    check("  committed after a real pause", got[-1], "Thanks.")
+
+    print("Smoke: a long stretch is still broken up")
+    c.eval("""meetSay("Reza",
+      "Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person to "
+      + "this meeting. Other sentence. Uh, after stop and speed again.", "b")""")
+    tick(c, 3000)
+    # Skip everything from the earlier turns in this test.
+    all_rows = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
+    rows_b = all_rows[all_rows.index("Hello, everyone. Uh, my name is Mohammad. And let's stay "
+                                     "to join other person to this meeting."):]
+    check("  more than one row", len(rows_b) > 1, True)
+    check("  each a readable length", [r for r in rows_b if len(r) < 40], [])
+    check("  nothing lost", " ".join(rows_b),
+          "Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person to "
+          "this meeting. Other sentence. Uh, after stop and speed again.")
+
+
+test_meet_rows_are_readable()
 test_meet_two_speakers()
 test_google_meet_capture()
 test_empty_caption_window()
