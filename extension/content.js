@@ -574,12 +574,25 @@
     const pass = passthrough();
     panel.classList.toggle("passthrough", pass);
 
-    const reason = !server.ok ? "offline" : (pass ? "pass" : "");
+    // Captions plainly on screen in Teams, and nothing arriving here. Twice now a
+    // capture failure has looked to the reader like an empty panel and nothing
+    // more — no error, no clue, and a whole meeting lost before anyone realised
+    // it was not simply a quiet room.
+    const stalled = captionsVisible && !recentlyCaptured();
+
+    const reason = !server.ok ? "offline" : (stalled ? "stalled" : (pass ? "pass" : ""));
     panel.classList.toggle("why", !!reason);
+    // Cleared, not just hidden. Stale text behind a hidden banner is invisible
+    // until the day something shows it again with the wrong message on it.
+    $why.textContent = "";
     if (!reason) return;
 
-    $why.textContent = "";
-    if (reason === "offline") {
+    if (reason === "stalled") {
+      $why.appendChild(el("span", { text: "Teams is showing captions but they are not "
+                                        + "reaching this panel. Try " }));
+      $why.appendChild(el("b", { text: "\u2699 \u2192 reconnect captions" }));
+      $why.appendChild(el("span", { text: ". Click here to do that now." }));
+    } else if (reason === "offline") {
       $why.appendChild(el("span", { text: "The translation companion is not running, so "
                                         + "nothing is being translated. Start it with " }));
       $why.appendChild(el("b", { text: "server/run.sh" }));
@@ -624,7 +637,16 @@
   };
 
   // The banner exists to be acted on, so it is the control as well as the notice.
-  $why.onclick = () => { if (server.ok) openSettings(); else loadConfig(); };
+  $why.onclick = () => {
+    if (!server.ok) { loadConfig(); return; }
+    if (captionsVisible && !recentlyCaptured()) {
+      lastReattach = 0;
+      reattach("asked to");
+      loadConfig();
+      return;
+    }
+    openSettings();
+  };
 
   /**
    * Hiding the log and bringing it back.
@@ -1278,6 +1300,11 @@
       if (prev && prev.text === text) return;        // unchanged
       if (prev?.timer) clearTimeout(prev.timer);
 
+      // Proof that the element we are watching is the live one. Presence of
+      // caption text is not proof -- stale text sits in an abandoned container
+      // forever. Change is.
+      state.lastChange = Date.now();
+
       render(key, speaker, text, false);             // show at once, greyed
 
       // A line that has clearly finished is translated after the short window. One
@@ -1313,6 +1340,10 @@
     }
     if (state.observer) state.observer.disconnect();
     state.container = el;
+    // A freshly attached container has not produced anything yet, and must not be
+    // judged for that. The clock starts here.
+    state.attachedAt = Date.now();
+    state.lastChange = 0;
     state.observer = new MutationObserver(scan);
     state.observer.observe(el, { childList: true, subtree: true, characterData: true });
     $dot.classList.add("live");
@@ -1342,7 +1373,18 @@
     // parts of the meeting UI in web components, so the plain call finds nothing
     // even when the element is plainly there in the inspector.
     const wins = deepQueryAll('[data-tid="closed-caption-v2-window"]').filter(e => !isOurs(e));
-    if (wins.length) return { el: wins[0], how: 'data-tid="closed-caption-v2-window"' };
+    if (wins.length) {
+      // Prefer the one with captions actually in it. Teams can leave an old or
+      // empty caption window in the page, and taking the first match attaches to
+      // a box that will never change -- indistinguishable, from the reader's side,
+      // from the tool being broken.
+      const withText = wins
+        .map(w => [w, w.querySelectorAll(TEXT_SEL).length || deepQueryAll(TEXT_SEL, w).length])
+        .sort((a, b) => b[1] - a[1]);
+      const [best, count] = withText[0];
+      return { el: best, how: `data-tid="closed-caption-v2-window"`
+                            + (wins.length > 1 ? ` (${count} caption(s), best of ${wins.length})` : "") };
+    }
 
     const texts = deepQueryAll(TEXT_SEL).filter(e => !isOurs(e));
     if (!texts.length) return null;
@@ -1446,22 +1488,54 @@
    * This is what a page reload does for capture, without the reload — which also
    * drops you out of the meeting and throws away the transcript.
    *
-   * Pending settle timers belong to the element being abandoned, so they are
-   * dropped rather than fired: the new container will present the same speech
-   * under new keys, and emitting both would duplicate the last line or two.
+   * Settle timers are left running. An earlier version cleared them, reasoning
+   * that they belonged to the element being abandoned -- but that means every
+   * re-attach silently eats whatever was mid-sentence, and if re-attaching ever
+   * happens in a loop it eats the entire meeting. A duplicated line is visible
+   * and survivable; a missing one is neither.
    */
   function reattach(why) {
     console.log("[caption] re-attaching:", why);
     if (state.observer) { state.observer.disconnect(); state.observer = null; }
-    for (const p of state.pending.values()) if (p.timer) clearTimeout(p.timer);
-    state.pending.clear();
     state.container = null;
+    state.lastChange = 0;
+    widenings = 0;
     $dot.classList.remove("live");
     lastReattach = Date.now();
     if (!autoFind()) meta(`re-attaching (${why})\u2026`);
   }
 
   let lastReattach = 0;
+
+  /** Are captions on screen in Teams right now? Kept by the poller. */
+  let captionsVisible = false;
+
+  /**
+   * Has anything been captured lately?
+   *
+   * Silence is normal, so this has to be generous — but a container that is
+   * working updates constantly whenever anyone speaks, and one that has produced
+   * nothing while captions are visibly scrolling past is not working.
+   */
+  const STALLED_AFTER_MS = 25000;
+  const recentlyCaptured = () =>
+    !!state.container &&
+    Date.now() - (state.lastChange || state.attachedAt || 0) < STALLED_AFTER_MS;
+
+  /**
+   * How long a container must produce nothing before we suspect it.
+   *
+   * Only reached when widening cannot help — which means caption text has turned
+   * up somewhere with no sensible common ancestor, so the area really has moved.
+   * Still a wait rather than an instant reaction, because a container that is
+   * working updates this constantly and must never be given up on mid-meeting.
+   */
+  const MOVED_AFTER_MS = 8000;
+
+  /** Widening is monotonic, so it terminates on its own — but a cap means a
+   *  pathological page cannot walk us up to <body> one step at a time. */
+  const MAX_WIDENINGS = 6;
+  let widenings = 0;
 
   /**
    * Keep looking, indefinitely.
@@ -1487,6 +1561,8 @@
 
     // Are captions on screen right now?
     const captionsOn = deepQueryAll(TEXT_SEL).some(e => !isOurs(e));
+    captionsVisible = captionsOn;
+    paintStatus();          // the "not reaching this panel" banner follows from it
 
     if (captionsOn !== captionsWere) {
       // Captions were switched on or off. That is a change in the world, so the
@@ -1513,26 +1589,54 @@
       /*
        * Attached to the wrong element.
        *
-       * The old check asked whether our container still HELD caption text, and
-       * treated that as proof it was still the live one. It is not: Teams can
-       * start writing captions into a new element while the old one stays in the
-       * page with its last few lines still in it. That reads as healthy forever,
-       * so the panel went quiet and only reloading the page brought it back —
-       * which also drops you out of the meeting.
+       * The signal is NOT "caption text exists somewhere I am not watching". Teams
+       * has more than one place caption-ish text can live, and on some builds that
+       * condition is simply always true — which turned this into a re-attach every
+       * few seconds, and since re-attaching used to discard pending lines, into a
+       * meeting where only the first sentence ever appeared. That was worse than
+       * the problem it was added for, on both Linux and Windows.
        *
-       * Caption text somewhere we are NOT watching is the actual signal.
+       * The signal that means something is: text is arriving somewhere else while
+       * NOTHING has changed here for a long time. A container we are correctly
+       * attached to updates constantly whenever anyone speaks, so this cannot fire
+       * while capture is working.
        */
       const stray = deepQueryAll(TEXT_SEL)
         .filter(e => !isOurs(e) && !within(state.container, e));
 
-      // Rate-limited: if autoFind picks the same wrong element again this would
-      // otherwise re-attach every second for the rest of the meeting.
-      if (stray.length && Date.now() - lastReattach > 5000) {
-        meta("captions moved \u2014 re-attaching\u2026");
-        reattach("captions moved");
+      if (stray.length) {
+        /*
+         * Captions somewhere we are not watching. WIDEN to take them in, rather
+         * than letting go and searching again.
+         *
+         * Re-attaching here was the mistake. On some Teams builds this condition
+         * is simply always true, so it re-attached every few seconds forever --
+         * and because re-attaching discarded pending lines, a meeting showed its
+         * first sentence and nothing else. On Linux and then on Windows.
+         *
+         * Widening cannot do that. Each step strictly grows the subtree, so it
+         * converges within a few tries and then this condition stops being true.
+         * Nothing is dropped, because nothing is let go of.
+         */
+        const wider = commonAncestor([state.container, ...stray]);
+        const tooFar = !wider || wider === document.body ||
+                       wider === document.documentElement;
+        if (!tooFar && wider !== state.container && widenings < MAX_WIDENINGS) {
+          widenings++;
+          attach(wider, `widened to take in ${stray.length} caption(s) elsewhere`);
+          return;
+        }
+
+        // Widening is exhausted or would swallow the page. Fall back to letting go
+        // and searching again -- but only once the container has gone properly
+        // quiet, so this can never fire while capture is working.
+        const quietFor = Date.now() - (state.lastChange || state.attachedAt || 0);
+        if (quietFor > MOVED_AFTER_MS && Date.now() - lastReattach > MOVED_AFTER_MS) {
+          meta("captions moved \u2014 re-attaching\u2026");
+          reattach("captions moved");
+        }
         return;
       }
-      if (stray.length) return;   // waiting out the backoff
 
       const alive = state.container.querySelector(TEXT_SEL) ||
                     deepQueryAll(TEXT_SEL, state.container).length ||

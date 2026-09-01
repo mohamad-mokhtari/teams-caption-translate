@@ -254,6 +254,19 @@ closed.
 
 ### If captions stop reaching the panel
 
+When the panel finds captions somewhere it is not watching, it **widens** to take
+them in rather than letting go and searching again. That distinction matters: on some
+builds, caption-like text exists outside the live caption area permanently — an
+aria-live region, a second copy in the meeting UI — so "captions I am not watching"
+is always true. Treating that as a fault meant letting go every few seconds, and
+because letting go used to discard lines mid-sentence, a whole meeting became its
+first sentence. Widening cannot do that: each step strictly grows the subtree, so it
+converges and then stops, and nothing in flight is dropped.
+
+Letting go only happens when the container has produced **nothing at all** for a
+while and captions are arriving elsewhere — a container that is working updates
+constantly, so it cannot happen mid-meeting.
+
 Teams does not render its caption area the same way everywhere. Some builds put every
 line inside one `closed-caption-v2-window`; others give **each line its own wrapper**
 with no such window at all. The panel attaches to an ancestor of *every* caption line

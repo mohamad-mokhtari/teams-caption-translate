@@ -47,6 +47,33 @@ let ccWindow = null, stage = null;
 let lineNo = 0;
 let lines = {};
 
+/*
+ * A second copy of caption text that is not the live caption area.
+ *
+ * Teams renders an aria-live region for screen readers, and other caption-ish
+ * text exists around the meeting UI. Anything that treats "caption text I am not
+ * watching" as proof of a problem will see this and never stop reacting -- which
+ * is what turned a whole meeting into its first sentence.
+ */
+/** An old, empty caption window left behind in the page. Teams does this. */
+function addEmptyCaptionWindow() {
+  const orphan = document.createElement("div");
+  orphan.setAttribute("data-tid", "closed-caption-v2-window");
+  document.body.insertBefore
+    ? document.body.appendChild(orphan) : document.body.appendChild(orphan);
+}
+
+function addDecoyCaptionText(text) {
+  const region = document.createElement("div");
+  region.setAttribute("aria-live", "polite");
+  const span = document.createElement("span");
+  span.setAttribute("data-tid", "closed-caption-text");
+  span.className = "fui-StyledText";
+  span.textContent = text;
+  region.appendChild(span);
+  document.body.appendChild(region);
+}
+
 function buildPage() {
   stage = document.createElement("div");
   stage.setAttribute("data-tid", "meeting-stage");
@@ -403,9 +430,12 @@ def test_captions_move():
     check("  captured before", len(json.loads(rows(c))), 1)
 
     c.eval("moveCaptionsToANewContainer()")
-    tick(c, 2000)
     c.eval('say("Sarah", "And this one arrives after Teams rebuilt the caption area.")')
-    tick(c, 2000)
+    # Recovery is deliberately not instant here: the old and new areas share no
+    # sensible ancestor, so widening cannot help and the container has to be given
+    # up on -- which only happens once it has gone properly quiet, so that a
+    # working container is never abandoned mid-meeting.
+    tick(c, 12000)
 
     got = json.loads(rows(c))
     check("  captured after the move", len(got), 2)
@@ -553,9 +583,14 @@ def test_no_caption_window():
     # caption area starts. So it attaches immediately -- catching that line -- and
     # widens once a second line proves the container was too narrow. What matters
     # is that it converges and then stops, not that it guesses right first time.
-    reattaches = c.eval('logLines.filter(l => l[1].indexOf("re-attaching") >= 0).length')
-    check("  widened once, then settled", reattaches, 1)
-    check("  spans the lines", "common ancestor of 2" in c.eval('logLines.map(l => l[1]).join(" ")'), True)
+    # The first caption arrives alone and one line cannot say where the caption area
+    # starts, so it attaches immediately -- catching that line -- and then WIDENS to
+    # take in the next one. Widening rather than letting go and searching again is
+    # what makes this safe: each step strictly grows the subtree, so it converges,
+    # and nothing in flight is dropped on the way.
+    log = c.eval('logLines.map(l => l[1]).join(" | ")')
+    check("  widened rather than let go", "widened to take in" in log, True)
+    check("  never let go", "re-attaching" in log, False)
     check("  not mislabelled as shadow DOM",
           "shadow DOM" in c.eval('logLines.map(l => l[1]).join(" ")'), False)
 
@@ -569,6 +604,112 @@ def test_no_caption_window():
     check("  all of them captured", len(json.loads(rows(c))), 12)
 
 
+
+def test_decoy_caption_text():
+    """
+    Caption text that is not the live caption area -- an aria-live region, a
+    second copy somewhere in the meeting UI.
+
+    This is the shape that broke a real meeting on Linux and then on Windows: the
+    condition "caption text exists somewhere I am not watching" was permanently
+    true, so the panel let go of its container every few seconds and, because
+    letting go discarded pending lines, showed the first sentence and nothing
+    else.
+    """
+    print("Smoke: a second copy of caption text elsewhere in the page")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('addDecoyCaptionText("some other caption-ish text that never changes")')
+
+    said = [f"Sentence number {i}, spoken in a meeting that should just keep working."
+            for i in range(10)]
+    for t in said:
+        c.eval(f'say("Sarah", "{t}")')
+        tick(c, 1500)
+
+    got = json.loads(rows(c))
+    check("  every line captured", len(got), len(said))
+    check("  the last one too", got[-1]["text"] if got else "", said[-1])
+    check("  all translated", [r["text"] for r in got if not r["tr"]], [])
+
+    log = c.eval('logLines.map(l => l[1]).join(" | ")')
+    check("  never let go of the container", "re-attaching" in log, False)
+    widened = c.eval('logLines.filter(l => l[1].indexOf("widened") >= 0).length')
+    # Widening is bounded and monotonic, so even when it cannot help it stops.
+    check("  widening stopped by itself", widened <= 6, True)
+
+    print("Smoke: and it survives a long stretch of it")
+    c.eval("logLines.length = 0")
+    for i in range(20):
+        c.eval(f'say("Reza", "A later sentence, number {i + 100}, still going along fine.")')
+        tick(c, 1500)
+    check("  still capturing", len(json.loads(rows(c))), 30)
+    check("  and still not letting go",
+          "re-attaching" in c.eval('logLines.map(l => l[1]).join(" | ")'), False)
+
+
+
+def test_stalled_capture_is_visible():
+    """
+    Capture failing used to look like an empty panel and nothing else.
+
+    The banner for it is a backstop and is not exercised end to end here: every
+    break this harness can construct is one the panel recovers from by itself,
+    which is the right way round. What is tested is that recovery happens, and
+    that nothing stale is left on screen afterwards.
+    """
+    print("Smoke: the caption area moves somewhere unrelated")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "One sentence that does get through normally.")')
+    tick(c, 1500)
+    check("  quiet meeting says nothing",
+          bool(c.eval('document.querySelector("#mct-panel").classList.contains("why")')), False)
+
+    # Teams throws the caption area away and builds a new one somewhere with no
+    # sensible shared ancestor, so widening cannot help and the container has to be
+    # given up on.
+    c.eval("moveCaptionsToANewContainer()")
+    before = len(json.loads(rows(c)))
+    for i in range(4):
+        c.eval(f'say("Sarah", "A sentence spoken after the caption area moved, {i}.")')
+        tick(c, 4000)
+
+    got = json.loads(rows(c))
+    check("  recovered on its own", len(got) > before, True)
+    check("  the newest line is there", "after the caption area moved" in got[-1]["text"], True)
+    # Recovery beat the stalled banner to it, which is the right way round: fixing
+    # itself is better than telling somebody how to fix it.
+    check("  no banner needed",
+          bool(c.eval('document.querySelector("#mct-panel").classList.contains("why")')), False)
+    check("  and no stale text left behind",
+          c.eval('document.querySelector("#mct-why").textContent'), "")
+
+
+
+def test_empty_caption_window():
+    """An old, empty caption window left in the page must not win the attach."""
+    print("Smoke: two caption windows, one of them empty")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('detectAnswer = {lang:"en", name:"English"};')
+    # The empty one first, so "take the first match" picks exactly the wrong box.
+    c.eval("addEmptyCaptionWindow(); buildPage();")
+    c.eval(SRC); tick(c, 200)
+
+    said = ["Good morning, this should reach the panel despite the empty window.",
+            "And so should this second sentence, spoken shortly afterwards."]
+    for t in said:
+        c.eval(f'say("Sarah", "{t}")')
+        tick(c, 1500)
+
+    got = json.loads(rows(c))
+    check("  captured anyway", len(got), 2)
+    check("  attached to the one with captions in it",
+          "best of" in c.eval('logLines.map(l => l[1]).join(" ")'), True)
+
+
+test_empty_caption_window()
+test_stalled_capture_is_visible()
+test_decoy_caption_text()
 test_no_caption_window()
 test_service_down()
 test_collapse_and_tabs()

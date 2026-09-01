@@ -180,6 +180,23 @@ class MutationObserver {
 // Timers are driven by the test, not by wall time: a caption settles after a
 // number of milliseconds, and a test should not have to wait them out.
 let now = 0, timerId = 0;
+
+/*
+ * Date must follow the same clock.
+ *
+ * It did not, and that quietly hollowed out every time-based test here. The code
+ * under test asks Date.now() how long a container has been silent, how long ago a
+ * caption was first seen, when it last re-attached -- and against the real clock
+ * all of those are a few milliseconds, because a test runs instantly. Rules with
+ * multi-second thresholds could therefore never fire, and a test that expected
+ * them not to fire passed for entirely the wrong reason.
+ */
+const _RealDate = globalThis.Date;
+const _BASE = _RealDate.parse("2026-09-01T15:00:00Z");
+class Date extends _RealDate {
+  constructor(...a) { super(...(a.length ? a : [_BASE + now])); }
+  static now() { return _BASE + now; }
+}
 const timers = new Map();
 function setTimeout(fn, ms = 0) { timers.set(++timerId, { fn, at: now + ms, every: 0 }); return timerId; }
 function setInterval(fn, ms = 0) { timers.set(++timerId, { fn, at: now + ms, every: ms }); return timerId; }
