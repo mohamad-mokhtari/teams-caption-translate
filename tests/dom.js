@@ -243,7 +243,12 @@ function fetch(url, opts = {}) {
 const navigator = { language: "en-US", languages: ["en-US"], clipboard: { writeText: () => Promise.resolve() } };
 const localStorage = (() => { const m = {}; return {
   getItem: (k) => (k in m ? m[k] : null), setItem: (k, v) => { m[k] = String(v); }, }; })();
-const location = { href: "https://teams.cloud.microsoft/meeting" };
+// hostname, not just href: the platform table matches on it, and leaving it
+// undefined silently selected the generic fallback for every test.
+const location = {
+  href: "https://teams.cloud.microsoft/v2/",
+  hostname: "teams.cloud.microsoft",
+};
 const innerWidth = 1600, innerHeight = 900;
 function addEventListener() {}
 

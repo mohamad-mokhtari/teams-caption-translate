@@ -41,6 +41,7 @@ app.add_middleware(
         "https://teams.cloud.microsoft",
         "https://teams.microsoft.com",
         "https://teams.live.com",
+        "https://meet.google.com",
     ],
     allow_origin_regex=r"https://.*\.(cloud\.microsoft|teams\.microsoft\.com)",
     allow_methods=["POST", "GET", "OPTIONS"],

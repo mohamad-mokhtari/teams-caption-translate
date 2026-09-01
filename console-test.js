@@ -246,15 +246,75 @@
   // fui-* is Fluent UI's stable naming, so it survives far better than the hashed
   // classes around it — but it is used all over Teams, not only for captions. So we
   // look for the span, then attach to its container, rather than trusting it alone.
-  const CANDIDATES = [
-    '[data-tid="closed-caption-v2-window"] span.fui-StyledText',
-    '[data-tid="closed-caption-v2-window"]',
-    '[data-tid="closed-caption-renderer-wrapper"]',
-    '[data-tid*="closed-caption"]',
-    '[class*="closedCaption"]',
-    '[class*="caption"]',
-    '[aria-label*="aption"]',
+  /**
+   * Everything that differs between meeting platforms, in one table.
+   *
+   * The capture loop, the settle rules, translation, the panel, transcripts —
+   * none of it knows what Teams is. Only these selectors do. Supporting another
+   * platform is meant to be an entry here, not a second copy of this file: one
+   * codebase means a fix reaches both, and forking means one of them silently
+   * keeps the bug.
+   *
+   * `window` is an element known to wrap the whole caption area, when the
+   * platform has one. `candidates` are fallbacks in descending order of trust —
+   * attribute hooks first, because generated class names change without warning.
+   */
+  const PLATFORMS = [
+    {
+      name: "teams",
+      hosts: /(^|\.)teams\.microsoft\.com$|(^|\.)teams\.live\.com$|(^|\.)cloud\.microsoft$/,
+      text: '[data-tid="closed-caption-text"]',
+      author: '[data-tid="author"]',
+      window: '[data-tid="closed-caption-v2-window"]',
+      candidates: [
+        '[data-tid="closed-caption-v2-window"] span.fui-StyledText',
+        '[data-tid="closed-caption-v2-window"]',
+        '[data-tid="closed-caption-renderer-wrapper"]',
+        '[data-tid*="closed-caption"]',
+        '[class*="closedCaption"]',
+      ],
+      verified: "2026-08-29, and again against a second layout on 2026-09-02",
+    },
+    {
+      /*
+       * Google Meet — NOT VERIFIED against a real call.
+       *
+       * Meet's markup is obfuscated and changes, so these are structural guesses
+       * rather than anything observed. Auto-detect will probably fail, and the
+       * manual "find captions" button is the way in until tools/probe.js has been
+       * run in an actual Meet call and these replaced with what it reports.
+       *
+       * Deliberately not left out altogether: with the entry present the panel
+       * loads, the manual attach works, and the probe can be run from the panel
+       * itself rather than by pasting a script.
+       */
+      name: "meet",
+      hosts: /(^|\.)meet\.google\.com$/,
+      text: '[jsname] > span, [data-self-name] ~ div span',
+      author: '[class*="zs7s8d"], [data-self-name], [class*="speaker"]',
+      window: '[jsname="dsyMBc"], [aria-label*="aptions"], [role="region"][aria-label*="aption"]',
+      candidates: [
+        '[jsname="dsyMBc"]',
+        '[aria-label*="aptions"]',
+        '[role="region"][aria-label*="aption"]',
+        '[class*="caption"]',
+      ],
+      verified: null,
+    },
   ];
+
+  /** Anything unrecognised gets the generic hooks and the manual buttons. */
+  const GENERIC = {
+    name: "unknown",
+    text: '[class*="caption"] span, [aria-live] span',
+    author: '[class*="author"], [class*="speaker"], [class*="name"]',
+    window: '[class*="caption"], [aria-label*="aption"]',
+    candidates: ['[class*="caption"]', '[aria-label*="aption"]', '[aria-live]'],
+    verified: null,
+  };
+
+  const PLATFORM = PLATFORMS.find(p => p.hosts.test(location.hostname)) || GENERIC;
+  const CANDIDATES = [...PLATFORM.candidates, '[class*="caption"]', '[aria-label*="aption"]'];
 
   /**
    * Is this node part of our own UI?
@@ -1254,8 +1314,8 @@
    * tests hook into, so they are far more durable. We key off those exclusively and
    * treat everything else as decoration.
    */
-  const TEXT_SEL   = '[data-tid="closed-caption-text"]';
-  const AUTHOR_SEL = '[data-tid="author"]';
+  const TEXT_SEL   = PLATFORM.text;
+  const AUTHOR_SEL = PLATFORM.author;
 
   /** Stable per-element ids. Teams mutates a line's text in place as the ASR
    *  revises, so identity must follow the NODE, not its content or its index —
@@ -1373,7 +1433,7 @@
     // deepQueryAll pierces open shadow roots; querySelector does not. Teams renders
     // parts of the meeting UI in web components, so the plain call finds nothing
     // even when the element is plainly there in the inspector.
-    const wins = deepQueryAll('[data-tid="closed-caption-v2-window"]').filter(e => !isOurs(e));
+    const wins = deepQueryAll(PLATFORM.window).filter(e => !isOurs(e));
     if (wins.length) {
       // Prefer the one with captions actually in it. Teams can leave an old or
       // empty caption window in the page, and taking the first match attaches to
@@ -1383,7 +1443,7 @@
         .map(w => [w, w.querySelectorAll(TEXT_SEL).length || deepQueryAll(TEXT_SEL, w).length])
         .sort((a, b) => b[1] - a[1]);
       const [best, count] = withText[0];
-      return { el: best, how: `data-tid="closed-caption-v2-window"`
+      return { el: best, how: `${PLATFORM.name} caption window`
                             + (wins.length > 1 ? ` (${count} caption(s), best of ${wins.length})` : "") };
     }
 
@@ -1977,6 +2037,10 @@
   // appears rather than making them reload the page.
   every(() => { if (!server.ok) loadConfig(); }, 15000);
 
+  console.log(
+    `[caption] platform: ${PLATFORM.name}`,
+    PLATFORM.verified ? `(selectors verified ${PLATFORM.verified})`
+                      : "(SELECTORS NOT VERIFIED — expect to use \u2699 \u2192 find captions)");
   window.__mctCleanup = () => {
     if (state.observer) state.observer.disconnect();
     for (const t of timers) clearInterval(t);

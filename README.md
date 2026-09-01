@@ -129,6 +129,38 @@ Not built yet — phase 0 has to pass first.
 
 ---
 
+## Other platforms
+
+Everything except caption discovery is platform-independent — the settle rules,
+translation, the panel, transcripts, the language handling. Only the selectors know
+what Teams is, and they live in one table (`PLATFORMS` at the top of
+`extension/content.js`). Adding a platform is an entry there, not a second copy of
+the file.
+
+**Google Meet is wired up but unverified.** The extension loads on
+`meet.google.com` and the panel appears, but Meet's markup is obfuscated and the
+selectors are structural guesses, not anything observed. Auto-detect will most likely
+fail; **⚙ → find captions** is the way in until they are replaced.
+
+To replace them, one thing has to come from a real call:
+
+1. Join a Meet call, turn captions on, and **say a few sentences**
+2. Open DevTools on that tab, paste [`tools/probe.js`](tools/probe.js), press Enter
+3. It asks for a few words you just said, finds them in the page, and reports the
+   markup around them — copied to your clipboard
+4. Send that back
+
+The probe reads the page and nothing else: no network, no changes to the meeting. It
+finds the captions **by their content** rather than by guessing a selector, which is
+the whole point — a guess is what we are trying to replace.
+
+The console log names the platform and says whether anyone has checked it:
+
+```
+[caption] platform: meet (SELECTORS NOT VERIFIED — expect to use ⚙ → find captions)
+[caption] platform: teams (selectors verified 2026-08-29, and again ...)
+```
+
 ## Panel features
 
 ### Opening and closing

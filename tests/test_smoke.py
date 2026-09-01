@@ -707,6 +707,39 @@ def test_empty_caption_window():
           "best of" in c.eval('logLines.map(l => l[1]).join(" ")'), True)
 
 
+
+def test_platform_table():
+    """Which platform's selectors get used, per host."""
+    print("Smoke: the right platform for the host")
+    src = (ROOT / "extension" / "content.js").read_text()
+    i = src.index("  const PLATFORMS = [")
+    table = src[i:src.index("\n  /**\n   * Is this node part of our own UI?", i)]
+
+    for host, want in [("teams.cloud.microsoft", "teams"),
+                       ("teams.microsoft.com", "teams"),
+                       ("emea.teams.microsoft.com", "teams"),
+                       ("teams.live.com", "teams"),
+                       ("meet.google.com", "meet"),
+                       ("zoom.us", "unknown"),
+                       # A lookalike must not match: cloud.microsoft is matched on
+                       # a boundary, so this is somebody else's domain.
+                       ("nocloud.microsoft.evil.com", "unknown")]:
+        # A fresh context each time: the table declares consts, and re-evaluating
+        # them in one context throws rather than re-binding.
+        c = quickjs.Context()
+        c.eval(f'var location = {{ hostname: "{host}" }};' + table)
+        check(f"  {host}", c.eval("PLATFORM.name"), want)
+
+    print("Smoke: unverified selectors say so")
+    c = quickjs.Context()
+    c.eval('var location = { hostname: "x" };' + table)
+    check("  teams is verified", bool(c.eval(
+        'PLATFORMS.find(p => p.name === "teams").verified')), True)
+    check("  meet is not", c.eval(
+        'PLATFORMS.find(p => p.name === "meet").verified'), None)
+
+
+test_platform_table()
 test_empty_caption_window()
 test_stalled_capture_is_visible()
 test_decoy_caption_text()
