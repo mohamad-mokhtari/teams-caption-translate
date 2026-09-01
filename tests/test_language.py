@@ -9,11 +9,19 @@ and the extension's half, lifted verbatim from content.js.
 """
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
+from pathlib import Path
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "server"))
+
+# Before any app import: pydantic reads the environment when Settings is
+# constructed, so setting this later has no effect and the test writes into the
+# real transcript folder -- which is how this was first noticed.
+import tempfile  # noqa: E402
+os.environ.setdefault("TRANSCRIPT_DIR", tempfile.mkdtemp(prefix="mct-lang-"))
 
 fails: list[str] = []
 
@@ -154,8 +162,52 @@ def test_extension():
     check("  nothing matches -> the default", c.eval('guessTarget("fa")'), "fa")
 
 
+# --------------------------------------------- a language change mid-meeting
+
+def test_language_change():
+    from app import transcript as T
+    T._sessions.clear()
+
+    n = [0]
+    def rec(kind, text, tr="", spk="", ts="15:00:14"):
+        n[0] += 1
+        return {"id": str(n[0]), "kind": kind, "t": f"2026-09-01T{ts}Z",
+                "speaker": spk, "text": text, "translation": tr}
+
+    print("File: ten lines in Italian, then Persian from eleven on")
+    # The panel used to wipe the Italian when the reader switched. The file never
+    # did, and the two must agree: those lines were translated, they are correct,
+    # and they are the part of a meeting someone scrolls back to check.
+    r = T.append("2026-09-01_1500_x", "01/09/2026, 15:00", [
+        rec("line", "Good morning.", "Buongiorno.", "Sarah"),
+        rec("note", "Now translating into Persian (Farsi)", ts="15:02:03"),
+        rec("line", "We deploy on Friday.", "\u062c\u0645\u0639\u0647 \u062f\u06cc\u067e\u0644\u0648\u06cc.", "Sarah", "15:02:05"),
+    ], target_name="Italian")
+    body = Path(r["path"]).read_text()
+
+    check("  Italian kept", "Buongiorno." in body, True)
+    check("  Persian added", "\u062c\u0645\u0639\u0647 \u062f\u06cc\u067e\u0644\u0648\u06cc." in body, True)
+    check("  the change is marked", "Now translating into Persian" in body, True)
+    check("  marked in the right place",
+          body.index("Buongiorno.") < body.index("Now translating") < body.index("\u062c\u0645\u0639\u0647"), True)
+    check("  header names the reader's language, not the server default",
+          "**Reading in:** Italian" in body, True)
+
+    print("File: a speaker is named again after a divider")
+    # Sarah speaks on both sides of the note. Without resetting, the second run
+    # would inherit the heading from before the break and read as unattributed.
+    check("  Sarah named twice", body.count("**Sarah**"), 2)
+
+    print("File: no doubled rule when a note is the very first thing written")
+    T._sessions.clear()
+    r2 = T.append("2026-09-01_1600_y", "", [rec("note", "Captions are in English", ts="16:00:01")])
+    head = Path(r2["path"]).read_text()
+    check("  one rule after the header", head.count("---"), 1)
+
+
 test_table()
 test_passthrough()
+test_language_change()
 test_extension()
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

@@ -40,6 +40,11 @@ class _Session:
         self.written: set[str] = set()   # segment ids, so a retried flush cannot duplicate
         self.last_speaker: str | None = None
         self.count = 0
+        # Whether anything has followed the header yet. Distinct from `count`,
+        # which only moves once a whole batch is written -- a note in the middle
+        # of a batch would otherwise believe it was the first thing in the file
+        # and drop the rule that separates it from what came before.
+        self.written_any = False
 
 
 _lock = threading.Lock()
@@ -51,7 +56,7 @@ def directory() -> Path:
     return Path(settings.transcript_dir).expanduser().resolve()
 
 
-def _open_session(session_id: str, started_at: str, target_lang: str) -> _Session:
+def _open_session(session_id: str, started_at: str, target_name: str) -> _Session:
     if not _SAFE_ID.match(session_id):
         raise TranscriptError("bad session id")
 
@@ -70,7 +75,7 @@ def _open_session(session_id: str, started_at: str, target_lang: str) -> _Sessio
             f"# Meeting transcript\n\n"
             f"- **Started:** {started_at or datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
             f"- **Source:** Microsoft Teams live captions\n"
-            f"- **Translated into:** {target_lang}\n\n"
+            f"- **Reading in:** {target_name}\n\n"
             f"---\n\n"
         )
         path.write_text(header, encoding="utf-8")
@@ -85,13 +90,28 @@ def _format(seg: dict, sess: _Session) -> str:
     person talking for several lines in a row, and repeating the name above every
     line turns a readable transcript into a wall of headings.
     """
+    ts = (seg.get("t") or "")[11:19]          # HH:MM:SS out of an ISO timestamp
+
+    if seg.get("kind") == "note":
+        # A language change. Everything above it is in the previous language and
+        # stays that way -- the divider is what makes that legible rather than
+        # looking like the file lost track of itself halfway through.
+        #
+        # last_speaker is reset so the next line names its speaker again: after a
+        # visual break, an unattributed line belongs to nobody.
+        sess.last_speaker = None
+        note = " ".join((seg.get("text") or "").split())
+        # No rule when nothing has been written yet: the header already ends with
+        # one, and two in a row reads as an empty section.
+        rule = "" if not sess.written_any else "\n---\n"
+        return f"{rule}\n*{ts} \u2014 {note}*\n"
+
     out = []
     speaker = (seg.get("speaker") or "").strip() or "Unknown speaker"
     if speaker != sess.last_speaker:
         out.append(f"\n**{speaker}**\n")
         sess.last_speaker = speaker
 
-    ts = (seg.get("t") or "")[11:19]          # HH:MM:SS out of an ISO timestamp
     text = " ".join((seg.get("text") or "").split())
     out.append(f"\n`{ts}` {text}\n")
 
@@ -103,7 +123,8 @@ def _format(seg: dict, sess: _Session) -> str:
     return "".join(out)
 
 
-def append(session_id: str, started_at: str, segments: list[dict]) -> dict:
+def append(session_id: str, started_at: str, segments: list[dict],
+           target_name: str = "") -> dict:
     """
     Append sealed segments to this session's file. Returns where it went.
 
@@ -116,7 +137,11 @@ def append(session_id: str, started_at: str, segments: list[dict]) -> dict:
     with _lock:
         sess = _sessions.get(session_id)
         if sess is None:
-            sess = _open_session(session_id, started_at, settings.target_lang_name)
+            # The reader's own language, which is per-person and can change during
+            # the meeting -- so the header records what it was when the file was
+            # opened, and the notes record every change after that.
+            sess = _open_session(session_id, started_at,
+                                 target_name or settings.target_lang_name)
             _sessions[session_id] = sess
 
         chunks, added = [], 0
@@ -126,6 +151,7 @@ def append(session_id: str, started_at: str, segments: list[dict]) -> dict:
                 continue
             chunks.append(_format(seg, sess))
             sess.written.add(sid)
+            sess.written_any = True     # per segment, not per batch: _format reads it
             added += 1
 
         if chunks:

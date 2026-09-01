@@ -151,7 +151,13 @@
    * What the captions turned out to be in. Detected once per meeting from the
    * first few settled lines — see maybeDetect.
    */
-  const caption = { lang: "", name: "", asked: false, samples: [] };
+  const caption = {
+    lang: "",       // detected caption language, "" until it is known
+    name: "",
+    busy: false,    // a /detect call is in flight
+    tried: false,   // one has been attempted at least once, for the UI message
+    samples: [],
+  };
 
   const LANG_KEY = "mct.target";
 
@@ -279,6 +285,7 @@
   style.textContent += "\n\n/* Empty state. Opening the panel before anyone has spoken used to show a blank\n   box, which reads as broken rather than as ready. */\n#mct-log:empty::before {\n  content: \"Waiting for captions\u2026  Turn on live captions in Teams and start speaking.\";\n  display: block;\n  color: #7b8194;\n  font-style: italic;\n  padding: 10px 0;\n}\n\n/* Where the transcript is being written. Small, and directly under the status\n   line, because the question it answers (\"where is my file?\") is asked once and\n   then never again. */\n#mct-file {\n  flex: 0 0 auto;\n  padding: 0 10px 7px;\n  font-size: 11px;\n  color: #6b7280;\n  cursor: pointer;\n  word-break: break-all;\n}\n#mct-file:hover { color: #9096a3; }\n#mct-file:empty { display: none; }\n#mct-file.err { color: #f59e0b; cursor: default; }\n";
   style.textContent += "\n\n/* --- full screen ----------------------------------------------------------\n   A third size beyond \"large\", for when following the conversation IS the task\n   and the meeting behind it is not. resize is off: there is nothing to resize\n   to, and leaving the native handle on gives a grab target that does nothing. */\n#mct-panel.full {\n  left: 0; top: 0; right: 0; bottom: 0;\n  width: auto; height: auto; max-height: none;\n  border: 0; border-radius: 0;\n  resize: none;\n}\n#mct-panel.full #mct-log { padding: 12px 18px; font-size: 15px; }\n#mct-panel.full .mct-seg { margin-bottom: 14px; max-width: 90ch; }\n\n/* Way back to the newest caption after scrolling up. Floats over the log rather\n   than sitting in the layout, so appearing does not reflow what is being read. */\n#mct-jump {\n  position: absolute;\n  left: 50%;\n  transform: translateX(-50%);\n  bottom: 44px;\n  display: none;\n  background: #232833; color: #e8e8ea;\n  border: 1px solid #3b4252; border-radius: 20px;\n  padding: .2rem .7rem;\n  font-size: 11px; font-weight: 600;\n  cursor: pointer; white-space: nowrap;\n  box-shadow: 0 3px 10px rgba(0,0,0,.4);\n}\n#mct-jump:hover { border-color: #4b5563; }\n";
   style.textContent += "\n\n/* --- settings row ---------------------------------------------------------\n   Hidden behind the gear. The language picker is a set-once control, so it does\n   not earn permanent space in a 380px header -- but the current language is\n   always visible in the status line below, so the state is never hidden even\n   when the control is. The capture tools live here too: they are meaningless to\n   anyone who is not debugging a selector, and they were crowding out the things\n   people actually press. */\n#mct-settings {\n  display: none;\n  flex: 0 0 auto;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  border-bottom: 1px solid #2a2f3a;\n  background: #11131a;\n}\n#mct-settings.open { display: flex; }\n#mct-settings label { font-size: 11px; color: #9096a3; display: block; margin-bottom: 3px; }\n#mct-lang {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 13px;\n}\n#mct-detected { font-size: 11px; color: #7b8194; }\n#mct-detected b { color: #9096a3; font-weight: 600; }\n#mct-tools { display: flex; flex-wrap: wrap; gap: 4px; }\n#mct-tools button {\n  background: #232833; color: #9096a3; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n#mct-tools button:hover { color: #e8e8ea; }\n\n/* --- scripts --------------------------------------------------------------\n   A font stack per writing system. The Latin defaults render Chinese, Japanese,\n   Korean, Thai and the Indic scripts as tofu or as something a reader can only\n   just make out, and CJK also breaks lines by character rather than by word --\n   so word-break has to be relaxed or every line breaks in the wrong place. */\n.mct-tr.s-arab, .mct-sum-out.s-arab {\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", \"Iranian Sans\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.s-hebr, .mct-sum-out.s-hebr {\n  font-family: \"Segoe UI\", Arial, \"Noto Sans Hebrew\", sans-serif; font-size: 14px;\n}\n.mct-tr.s-hans, .mct-sum-out.s-hans,\n.mct-tr.s-hant, .mct-sum-out.s-hant {\n  font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-jpan, .mct-sum-out.s-jpan {\n  font-family: \"Yu Gothic\", \"Hiragino Sans\", \"Noto Sans CJK JP\", \"Meiryo\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-kore, .mct-sum-out.s-kore {\n  font-family: \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans CJK KR\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n/* Thai and Khmer have no spaces between words, so a browser that breaks on\n   spaces will not break at all and the line runs off the side. */\n.mct-tr.s-thai, .mct-sum-out.s-thai {\n  font-family: \"Leelawadee UI\", \"Noto Sans Thai\", Tahoma, sans-serif;\n  font-size: 15px; word-break: break-all; line-height: 1.8;\n}\n.mct-tr.s-deva, .mct-sum-out.s-deva,\n.mct-tr.s-beng, .mct-sum-out.s-beng,\n.mct-tr.s-guru, .mct-sum-out.s-guru,\n.mct-tr.s-taml, .mct-sum-out.s-taml,\n.mct-tr.s-telu, .mct-sum-out.s-telu {\n  font-family: \"Nirmala UI\", \"Noto Sans\", sans-serif; font-size: 15px; line-height: 1.75;\n}\n.mct-tr.s-armn, .mct-sum-out.s-armn,\n.mct-tr.s-geor, .mct-sum-out.s-geor,\n.mct-tr.s-grek, .mct-sum-out.s-grek,\n.mct-tr.s-cyrl, .mct-sum-out.s-cyrl {\n  font-family: \"Segoe UI\", \"Noto Sans\", sans-serif;\n}\n\n/* Nothing to translate: the reader already speaks the meeting's language, so the\n   translation lane is not drawn at all rather than echoing each line back. */\n#mct-panel.passthrough .mct-tr,\n#mct-panel.passthrough .mct-lat { display: none; }\n";
+  style.textContent += "\n\n/* A language change, marked in the flow of the conversation. Everything above it\n   is in the previous language and stays that way; everything below is in the new\n   one. Without the marker the panel just looks inconsistent. */\n.mct-note {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 12px 0 10px;\n  font-size: 11px;\n  color: #9096a3;\n  font-style: italic;\n}\n.mct-note::before, .mct-note::after {\n  content: \"\";\n  flex: 1;\n  height: 1px;\n  background: #2a2f3a;\n}\n.mct-note .t { font-style: normal; color: #6b7280; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -500,27 +507,41 @@
    */
   async function setTarget(code, { persist = true } = {}) {
     if (!code || code === prefs.target) return;
+    // A change before anyone has spoken separates nothing, so it gets no divider.
+    const had = !!prefs.target && transcript.length > 0;
     prefs.target = code;
     if ($lang.value !== code) $lang.value = code;
     if (persist) await store.set(LANG_KEY, code);
 
-    for (const row of $log.querySelectorAll(".mct-seg")) {
-      const tr = row.querySelector(".mct-tr");
-      tr.textContent = "";
-      tr.className = trClass();
-      row.querySelector(".mct-lat").textContent = "";
-    }
+    /*
+     * What is already on screen is left alone.
+     *
+     * An earlier version cleared it, on the reasoning that a panel holding two
+     * languages is inconsistent. That was wrong: those lines were translated,
+     * they are correct, and throwing them away loses the part of the meeting the
+     * reader most likely scrolled back to check. The saved transcript never did
+     * this — it keeps the first ten in Italian and the rest in Persian — and the
+     * panel should not disagree with the file.
+     *
+     * Each row already carries the script and direction of the language it was
+     * translated into, set when its text arrived, so a mixed panel renders each
+     * half correctly. A divider says where the change happened.
+     */
+    if (had) note(`Now translating into ${targetName()}`);
+
     applyPassthrough();
     paintDetected();
     paintStatus();
-    meta(`showing captions in ${targetName()}`);
   }
 
   $lang.onchange = () => setTarget($lang.value);
 
   /** The translation lane's classes: direction and the script's font stack. */
-  const trClass = (error = "") =>
-    "mct-tr" + (targetRtl() ? " rtl" : "") + ` s-${targetScript()}` + (error ? " err" : "");
+  const trClass = (error = "", code = "") => {
+    const row = langs.byCode[code || prefs.target] || null;
+    return "mct-tr" + (row?.rtl ? " rtl" : "") + ` s-${row?.script || "latn"}`
+         + (error ? " err" : "");
+  };
 
   function applyPassthrough() {
     panel.classList.toggle("passthrough", passthrough());
@@ -528,8 +549,8 @@
 
   function paintDetected() {
     if (!caption.lang) {
-      $detected.textContent = caption.asked
-        ? "Could not tell what language the captions are in."
+      $detected.textContent = caption.tried
+        ? "Could not tell what language the captions are in yet."
         : "Listening for a few lines to work out the caption language\u2026";
       return;
     }
@@ -606,6 +627,18 @@
     $dot.classList.toggle("warn", !!state.container && !server.ok);
   }
 
+  function trimLog() {
+    while ($log.children.length > MAX_ROWS) {
+      // Rows are dropped from the TOP, which pulls everything below it upwards.
+      // For a reader scrolled back, that is the view jumping by a line every time
+      // someone speaks. Take the removed height back out of the scroll position so
+      // what they are reading stays where it is.
+      const before = $log.scrollHeight;
+      $log.firstChild.remove();
+      if (!stick) $log.scrollTop = Math.max(0, $log.scrollTop - (before - $log.scrollHeight));
+    }
+  }
+
   function render(key, speaker, text, final) {
     let row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (!row) {
@@ -617,15 +650,7 @@
       ]);
       row.dataset.k = key;
       $log.appendChild(row);
-      while ($log.children.length > MAX_ROWS) {
-        // Rows are dropped from the TOP, which pulls everything below it upwards.
-        // For a reader scrolled back, that is the view jumping by a line every time
-        // someone speaks. Take the removed height back out of the scroll position
-        // so what they are reading stays where it is.
-        const before = $log.scrollHeight;
-        $log.firstChild.remove();
-        if (!stick) $log.scrollTop = Math.max(0, $log.scrollTop - (before - $log.scrollHeight));
-      }
+      trimLog();
     }
     const spk = row.querySelector(".mct-spk");
     spk.textContent = speaker || "";
@@ -696,7 +721,7 @@
     if (names.includes(chosen)) $sumWho.value = chosen;
   }
 
-  function renderTranslation(key, text, error = "", latency = "") {
+  function renderTranslation(key, text, error = "", latency = "", lang = "") {
     // The transcript file wants the translation next to the original, and this is
     // the only place it arrives. Errors are not recorded: a line with no
     // translation is honest, one with "translator offline" written under it is not.
@@ -708,9 +733,36 @@
     if (!row) return;
     const tr = row.querySelector(".mct-tr");
     tr.textContent = error || text;
-    tr.className = trClass(error);
+    // Styled for the language the TEXT is in, not the one currently selected. A
+    // reply can land a second after the reader switched language, and dressing
+    // Italian in a right-to-left Persian font is worse than either alone.
+    tr.className = trClass(error, lang || prefs.target);
     row.querySelector(".mct-lat").textContent = latency;
     toBottom();
+  }
+
+  /**
+   * Mark a change in the flow of the conversation — a language switch, either
+   * the reader's or the meeting's.
+   *
+   * Goes into the transcript array alongside the caption lines, in order, so it
+   * reaches the Markdown file in the right place. Everything above a divider is
+   * in the previous language and stays that way.
+   */
+  function note(text) {
+    const row = el("div", { cls: "mct-note" }, [
+      el("span", { cls: "t", text: new Date().toLocaleTimeString() }),
+      el("span", { text }),
+    ]);
+    $log.appendChild(row);
+    trimLog();
+    toBottom();
+
+    transcript.push({
+      id: String(++segNo), kind: "note", key: "", t: new Date().toISOString(),
+      firstSeen: Date.now(), speaker: "", text, translation: "", saved: false,
+    });
+    console.log("[caption] --", text);
   }
 
   /** A segment stopped changing: record it, and ask for a translation. */
@@ -809,15 +861,31 @@
    */
   const DETECT_MIN_CHARS = 90;
   const DETECT_MAX_LINES = 6;
+  // Lines between re-checks. A meeting's caption language can be changed
+  // mid-call, and everything downstream quietly goes wrong when it is: the source
+  // hint is for the wrong language, and a reader may be translated for when they
+  // no longer need it, or not when they do. One call per few minutes of talking
+  // is a small price for noticing.
+  const DETECT_EVERY = 40;
+
+  let sinceDetect = 0;
 
   async function maybeDetect(text) {
-    if (caption.asked || !server.ok) return;
+    if (caption.busy || !server.ok) return;
 
     caption.samples.push(text);
-    const total = caption.samples.join(" ").length;
-    if (total < DETECT_MIN_CHARS && caption.samples.length < DETECT_MAX_LINES) return;
+    while (caption.samples.length > DETECT_MAX_LINES) caption.samples.shift();
 
-    caption.asked = true;
+    if (caption.lang) {
+      if (++sinceDetect < DETECT_EVERY) return;
+      sinceDetect = 0;
+    } else {
+      const total = caption.samples.join(" ").length;
+      if (total < DETECT_MIN_CHARS && caption.samples.length < DETECT_MAX_LINES) return;
+    }
+
+    caption.busy = true;
+    caption.tried = true;
     try {
       const r = await fetch(`${SERVER}/detect`, {
         method: "POST",
@@ -826,19 +894,32 @@
       });
       const d = await r.json();
       if (d.lang && d.lang !== "und") {
+        const changed = caption.lang && d.lang !== caption.lang;
+        const first   = !caption.lang;
         caption.lang = d.lang;
         caption.name = d.name || d.lang;
+
+        // Say so in the conversation, not just in the settings panel. Someone
+        // scrolling back through a meeting that switched from English to Spanish
+        // needs to know where that happened, and so does the saved transcript.
+        if (changed) {
+          note(passthrough()
+            ? `Meeting captions changed to ${caption.name} \u2014 same as yours, not translating`
+            : `Meeting captions changed to ${caption.name} \u2014 translating into ${targetName()}`);
+        } else if (first && transcript.length) {
+          note(passthrough()
+            ? `Captions are in ${caption.name} \u2014 same as yours, not translating`
+            : `Captions are in ${caption.name} \u2014 translating into ${targetName()}`);
+        }
         console.log("[caption] captions are in", caption.name,
                     passthrough() ? "(same as yours - not translating)" : "");
-      } else {
-        // Not fatal: without a source hint the translator still works, it just
-        // has less to go on. Allow another try as more of the meeting arrives.
-        caption.asked = false;
-        caption.samples = [];
       }
+      // "und" is not fatal: the translator works without a source hint, it just
+      // has less to go on, and more of the meeting may make the answer clear.
     } catch (e) {
-      caption.asked = false;
-      caption.samples = [];
+      /* the next scheduled check will try again */
+    } finally {
+      caption.busy = false;
     }
     applyPassthrough();
     paintDetected();
@@ -858,6 +939,11 @@
     const seq = (seqOf.get(key) || 0) + 1;
     seqOf.set(key, seq);
 
+    // Pinned for the lifetime of this request. The reader may change language
+    // while it is in flight, and the reply that comes back is a translation into
+    // THIS language, not the new one.
+    const asked = prefs.target;
+
     server.inflight++;
     paintStatus();
     try {
@@ -867,7 +953,7 @@
         body: JSON.stringify({
           key, speaker, text,
           context: recent.slice(-CONTEXT_N),
-          target: prefs.target,
+          target: asked,
           // A hint, not an instruction. Empty until detection has run.
           source: caption.lang || undefined,
         }),
@@ -880,16 +966,17 @@
 
       if (d.error) {
         server.lastError = d.error;
-        renderTranslation(key, "", d.error);
+        renderTranslation(key, "", d.error, "", asked);
       } else {
         server.lastError = "";
         server.lastMs = d.ms;
-        renderTranslation(key, d.translation, "", d.cached ? "cached" : `${Math.round(d.ms)}ms`);
+        renderTranslation(key, d.translation, "",
+                          d.cached ? "cached" : `${Math.round(d.ms)}ms`, asked);
       }
     } catch (e) {
       server.ok = false;
       server.lastError = `translator unreachable — is it running on ${SERVER}?`;
-      renderTranslation(key, "", server.lastError);
+      renderTranslation(key, "", server.lastError, "", asked);
     } finally {
       server.inflight--;
       paintStatus();
@@ -939,9 +1026,11 @@
         body: JSON.stringify({
           session: SESSION,
           started_at: STARTED_AT,
+          target_name: targetName(),
           segments: batch.map(r2 => ({
             id: r2.id, t: r2.t, speaker: r2.speaker,
             text: r2.text, translation: r2.translation,
+            kind: r2.kind || "line",
           })),
         }),
       });
@@ -1464,7 +1553,9 @@
   };
 
   panel.querySelector("#mct-copy").onclick = () => {
-    const txt = transcript.map(r => `${r.t} ${r.speaker ? r.speaker + ": " : ""}${r.text}`).join("\n");
+    const txt = transcript.map(r => r.kind === "note"
+      ? `\n-- ${r.text} --\n`
+      : `${r.t} ${r.speaker ? r.speaker + ": " : ""}${r.text}`).join("\n");
     navigator.clipboard.writeText(txt).then(() => meta(`copied ${transcript.length} segments`));
   };
 

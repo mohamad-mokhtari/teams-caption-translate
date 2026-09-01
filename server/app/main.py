@@ -216,11 +216,15 @@ class Segment(BaseModel):
     speaker: str = ""
     text: str = ""
     translation: str = ""
+    # "line" is a caption; "note" is a marker in the flow of the conversation,
+    # such as the reader or the meeting changing language.
+    kind: str = "line"
 
 
 class TranscriptIn(BaseModel):
     session: str = Field(description="Filename stem: [A-Za-z0-9_-], validated server-side")
     started_at: str = ""
+    target_name: str = ""      # the reader's language, for the file header
     segments: list[Segment] = Field(default_factory=list)
 
 
@@ -247,7 +251,8 @@ def save_transcript(req: TranscriptIn):
     """
     try:
         return TranscriptOut(**append_transcript(
-            req.session, req.started_at, [s.model_dump() for s in req.segments]))
+            req.session, req.started_at, [s.model_dump() for s in req.segments],
+            req.target_name))
     except TranscriptError as e:
         return TranscriptOut(error=str(e), directory=str(transcript_dir()))
     except OSError as e:

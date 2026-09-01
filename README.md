@@ -193,11 +193,37 @@ break lines by character rather than by word; Thai, which has no spaces at all, 
 line in `server/app/languages.py` — the picker builds itself from what the service
 sends.
 
-**Changing language mid-meeting** clears the translations already on screen rather
-than re-translating them. They are in the previous language, so leaving them would
-make the panel a mix of two, and re-translating what is visible could be two hundred
-calls at the press of a dropdown. New lines arrive in the new language, and the
-transcript file already has the old ones.
+### When a language changes
+
+**Nothing already translated is thrown away.** Ten lines in Italian, then you switch
+to Persian: the Italian stays, and line eleven onwards is Persian. Each row keeps the
+script and direction of the language it was translated into, so a mixed panel renders
+both halves correctly. The saved file has always worked this way and the panel now
+agrees with it.
+
+**A divider says where it happened**, in the panel and in the file:
+
+```
+────────  15:02:03 — Now translating into Persian (Farsi)  ────────
+```
+
+Three kinds get marked:
+
+| | Shown as |
+|---|---|
+| Detection finishes | *Captions are in Spanish — translating into Persian (Farsi)* |
+| You change your language | *Now translating into Persian (Farsi)* |
+| The meeting changes its caption language | *Meeting captions changed to Spanish — translating into Persian (Farsi)* |
+
+The caption language is **re-checked every 40 lines**, so a meeting switched from
+English to Spanish mid-call is noticed rather than quietly producing a wrong source
+hint — and possibly translating for someone who no longer needs it, or not for
+someone who now does.
+
+> If you see the divider appear and disappear between two similar languages
+> (Spanish/Portuguese, Croatian/Serbian), tell me — the fix is to require two
+> agreeing checks before accepting a change, and I would rather add that after
+> seeing it than guess at the threshold.
 
 **One honest limit:** distant pairs are worse than close ones. Japanese to Persian or
 Chinese to French are low-resource *pairs*, and the model will pivot through English
