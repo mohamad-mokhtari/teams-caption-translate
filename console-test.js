@@ -1347,10 +1347,17 @@
 
     const texts = deepQueryAll(TEXT_SEL).filter(e => !isOurs(e));
     if (!texts.length) return null;
-    const line = lineOf(texts[0]);
-    const root = line.parentElement || line;
+
+    // Every line, not just the first: whatever we attach to has to still be the
+    // right element when the sixth person speaks.
+    const lines = texts.map(lineOf);
+    let root = commonAncestor(lines) || lines[0];
+    // With a single line on screen -- which is the usual state the moment captions
+    // first appear -- the common ancestor of "all lines" is that one line. Attaching
+    // there would miss everything said afterwards, so step out to its container.
+    if (lines.includes(root)) root = parentOf(root) || root;
     const shadow = root.getRootNode() !== document ? " (shadow DOM)" : "";
-    return { el: root, how: "parent of first caption line" + shadow };
+    return { el: root, how: `common ancestor of ${lines.length} caption line(s)${shadow}` };
   }
 
   function autoFind() {
@@ -1403,6 +1410,10 @@
    * like it was somewhere else entirely, and the check below would re-attach once
    * a second forever.
    */
+  /** One step up, stepping out of a shadow root by way of its host. */
+  const parentOf = (n) =>
+    n.parentElement || (n.parentNode && n.parentNode.host) || n.host || null;
+
   function within(root, node) {
     let n = node;
     while (n) {
@@ -1410,6 +1421,24 @@
       n = n.parentNode || n.host || null;   // .host steps out of a shadow root
     }
     return false;
+  }
+
+  /**
+   * The nearest element containing all of these nodes.
+   *
+   * Needed because "the parent of the first caption line" is not the caption
+   * area. Where Teams gives each line its own wrapper — and it does, on some
+   * builds — that parent holds exactly one line, so everything anyone said after
+   * the first sentence was outside the element being watched, and never seen.
+   * The observer sat on a box that would never change again.
+   */
+  function commonAncestor(nodes) {
+    let root = nodes[0];
+    for (const n of nodes) {
+      while (root && !within(root, n)) root = parentOf(root);
+      if (!root) return null;
+    }
+    return root;
   }
 
   /**

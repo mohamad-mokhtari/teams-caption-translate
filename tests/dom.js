@@ -103,6 +103,9 @@ class Node {
   get parentNode() { return this.parentElement; }
   contains(n) { while (n) { if (n === this) return true; n = n.parentElement; } return false; }
   removeAttribute(k) { delete this.attributes[k]; }
+  getRootNode() { let n = this; while (n.parentElement) n = n.parentElement;
+                  return n === document.documentElement ? document : n; }
+  get shadowRoot() { return null; }
   get isConnected() {
     let n = this; while (n.parentElement) n = n.parentElement;
     return n === document.documentElement || n === document;

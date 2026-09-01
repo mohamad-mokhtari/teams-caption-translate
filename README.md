@@ -254,6 +254,18 @@ closed.
 
 ### If captions stop reaching the panel
 
+Teams does not render its caption area the same way everywhere. Some builds put every
+line inside one `closed-caption-v2-window`; others give **each line its own wrapper**
+with no such window at all. The panel attaches to an ancestor of *every* caption line
+it can see, not to the first line's parent — that parent holds one line, so on the
+second layout everything after the opening sentence was outside the element being
+watched, and the observer sat on a box that would never change again.
+
+The first caption arrives alone, and one line cannot tell you where the caption area
+starts. So it attaches straight away — catching that line — and widens once a second
+line shows the container was too narrow. One re-attach, then it settles.
+
+
 Teams sometimes rebuilds its caption area mid-meeting, leaving the old element in the
 page with its last few lines still in it. The panel now notices — the signal is caption
 text appearing somewhere it is **not** watching — and re-attaches on its own within a

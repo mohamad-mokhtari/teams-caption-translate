@@ -30,57 +30,75 @@ def check(label, got, want):
 
 
 PAGE = """
-// A Teams caption area, in the markup content.js was built against.
-let ccWindow = document.createElement("div");
-ccWindow.setAttribute("data-tid", "closed-caption-v2-window");
-document.body.appendChild(ccWindow);
-
+/*
+ * A Teams caption area.
+ *
+ * `layout` picks between the shapes Teams has been seen to render:
+ *
+ *   "window"   one [data-tid=closed-caption-v2-window] holding every line
+ *   "wrappers" each line in its own wrapper, with NO caption window -- which is
+ *              what forces captionRoot down its fallback path
+ *
+ * The second exists because the first was too kind: with every caption under one
+ * obvious ancestor, code that picks the wrong ancestor still looks correct.
+ */
+let layout = "window";
+let ccWindow = null, stage = null;
 let lineNo = 0;
-const lines = {};
+let lines = {};
+
+function buildPage() {
+  stage = document.createElement("div");
+  stage.setAttribute("data-tid", "meeting-stage");
+  document.body.appendChild(stage);
+  if (layout === "window") {
+    ccWindow = document.createElement("div");
+    ccWindow.setAttribute("data-tid", "closed-caption-v2-window");
+    stage.appendChild(ccWindow);
+  } else {
+    ccWindow = null;
+  }
+  lines = {};
+}
 
 /** Say something, or revise what was last said under the same id. */
 function say(speaker, text, id) {
+  if (!stage) buildPage();
   id = id || ("line" + (++lineNo));
   let line = lines[id];
   if (!line) {
+    // Real Teams: a per-line wrapper around the line, and the text span carries
+    // both the data-tid and the Fluent class.
+    const wrapper = document.createElement("div");
+    wrapper.className = "___" + (1000 + lineNo);
     line = document.createElement("div");
     line.setAttribute("data-tid", "closed-caption-line");
-    line.id = id;
     const who = document.createElement("span");
     who.setAttribute("data-tid", "author");
     who.textContent = speaker;
     const txt = document.createElement("span");
     txt.setAttribute("data-tid", "closed-caption-text");
+    txt.className = "fui-StyledText";
     line.appendChild(who);
     line.appendChild(txt);
-    ccWindow.appendChild(line);
+    wrapper.appendChild(line);
+    (ccWindow || stage).appendChild(wrapper);
     lines[id] = line;
   }
   line.querySelector('[data-tid="closed-caption-text"]').textContent = text;
   return id;
 }
 
-/** What the panel is showing: one entry per caption row. */
-function panelRows() {
-  const log = document.querySelector("#mct-log");
-  if (!log) return [];
-  return log.querySelectorAll(".mct-seg").map(r => ({
-    speaker: r.querySelector(".mct-spk").textContent,
-    text:    r.querySelector(".mct-txt").textContent,
-    tr:      r.querySelector(".mct-tr").textContent,
-  }));
-}
 /**
  * Throw away the caption area and build a new one, leaving the old node in the
  * page with its last lines still in it -- which is what Teams does, and what made
  * the old liveness check believe everything was fine forever.
  */
 function moveCaptionsToANewContainer() {
-  ccWindow.removeAttribute("data-tid");     // the old one stops being the live one
-  ccWindow = document.createElement("div");
-  ccWindow.setAttribute("data-tid", "closed-caption-v2-window");
-  document.body.appendChild(ccWindow);
-  for (const k of Object.keys(lines)) delete lines[k];
+  if (ccWindow) ccWindow.removeAttribute("data-tid");
+  stage.removeAttribute("data-tid");
+  stage = null;
+  buildPage();
 }
 
 /** Rows the reader can actually see, ignoring any a filter hid. */
@@ -101,6 +119,17 @@ function clickChip(name) {
 function panelNotes() {
   const log = document.querySelector("#mct-log");
   return log ? log.querySelectorAll(".mct-note").map(n => n.textContent) : [];
+}
+
+/** What the panel is showing: one entry per caption row. */
+function panelRows() {
+  const log = document.querySelector("#mct-log");
+  if (!log) return [];
+  return log.querySelectorAll(".mct-seg").map(r => ({
+    speaker: r.querySelector(".mct-spk").textContent,
+    text:    r.querySelector(".mct-txt").textContent,
+    tr:      r.querySelector(".mct-tr").textContent,
+  }));
 }
 """
 
@@ -499,6 +528,48 @@ def test_service_down():
     check("  translating again", bool(got[-1]["tr"]), True)
 
 
+
+def test_no_caption_window():
+    """
+    Teams without a [data-tid=closed-caption-v2-window], each line in its own
+    wrapper. captionRoot falls back to "the parent of the first line" -- which
+    holds exactly one line, so every other caption is somewhere else.
+    """
+    print("Smoke: captions in per-line wrappers, no caption window")
+    c = boot('layout = "wrappers"; detectAnswer = {lang:"en", name:"English"};')
+    said = ["Good morning everyone, thanks for joining us here today.",
+            "Today we are reviewing the feature extraction pipeline together.",
+            "Does anybody have a question before we get properly started?",
+            "Right, then let me share my screen with all of you now."]
+    for t in said:
+        c.eval(f'say("Sarah", "{t}")')
+        tick(c, 1500)
+
+    got = json.loads(rows(c))
+    check("  every line captured", len(got), len(said))
+    check("  the last one too", got[-1]["text"] if got else "", said[-1])
+
+    # The first caption arrives alone, and one line cannot tell you how far up the
+    # caption area starts. So it attaches immediately -- catching that line -- and
+    # widens once a second line proves the container was too narrow. What matters
+    # is that it converges and then stops, not that it guesses right first time.
+    reattaches = c.eval('logLines.filter(l => l[1].indexOf("re-attaching") >= 0).length')
+    check("  widened once, then settled", reattaches, 1)
+    check("  spans the lines", "common ancestor of 2" in c.eval('logLines.map(l => l[1]).join(" ")'), True)
+    check("  not mislabelled as shadow DOM",
+          "shadow DOM" in c.eval('logLines.map(l => l[1]).join(" ")'), False)
+
+    print("Smoke: a long meeting in that layout stays attached")
+    c.eval("logLines.length = 0")
+    for i in range(8):
+        c.eval(f'say("Reza", "Sentence number {i + 10}, spoken well into the meeting.")')
+        tick(c, 1500)
+    check("  no further re-attaches",
+          c.eval('logLines.filter(l => l[1].indexOf("re-attaching") >= 0).length'), 0)
+    check("  all of them captured", len(json.loads(rows(c))), 12)
+
+
+test_no_caption_window()
 test_service_down()
 test_collapse_and_tabs()
 test_captions_move()
