@@ -24,7 +24,34 @@ Everything depends on one question: *can we read Teams live captions reliably?* 
 rest is ordinary work. If no, the approach changes completely (capture audio, run ASR
 ourselves), and it's better to know that in an afternoon than in a month.
 
-### Install (Edge or Chrome)
+### Setting it up from zero
+
+On your own laptop, once:
+
+```bash
+git clone https://github.com/mohamad-mokhtari/teams-caption-translate.git
+cd teams-caption-translate
+
+cp server/.env.example server/.env
+#  edit it:  OPENAI_API_KEY=sk-...
+#            TARGET_LANG=<your language: es, fr, ja, zh, fa ...>
+
+server/run.sh            # Windows: server\run.bat
+```
+
+`run.sh` creates the virtual environment and installs everything on first run, then
+starts the companion on `127.0.0.1:8100`. **Leave that window open** — it is the thing
+doing the translating. One command every time after that.
+
+Then load the extension (below), open Teams **in the browser**, join a meeting and turn
+on live captions. The panel opens by itself. Press **⚙** to change your language.
+
+> **Each person needs their own OpenAI API key.** That, not the terminal, is the real
+> barrier for anyone who is not a developer. Beyond about three people, host the
+> companion once for everybody instead — they then install only the extension.
+> `PROVIDER=ollama` avoids the key entirely if a local model is acceptable.
+
+### Install the extension (Edge or Chrome)
 
 Copy the `extension/` folder to the laptop you use for Teams, then:
 
