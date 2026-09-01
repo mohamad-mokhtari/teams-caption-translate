@@ -287,7 +287,7 @@
   style.textContent += "\n\n/* --- full screen ----------------------------------------------------------\n   A third size beyond \"large\", for when following the conversation IS the task\n   and the meeting behind it is not. resize is off: there is nothing to resize\n   to, and leaving the native handle on gives a grab target that does nothing. */\n#mct-panel.full {\n  left: 0; top: 0; right: 0; bottom: 0;\n  width: auto; height: auto; max-height: none;\n  border: 0; border-radius: 0;\n  resize: none;\n}\n#mct-panel.full #mct-log { padding: 12px 18px; font-size: 15px; }\n#mct-panel.full .mct-seg { margin-bottom: 14px; max-width: 90ch; }\n\n/* Way back to the newest caption after scrolling up. Floats over the log rather\n   than sitting in the layout, so appearing does not reflow what is being read. */\n#mct-jump {\n  position: absolute;\n  left: 50%;\n  transform: translateX(-50%);\n  bottom: 44px;\n  display: none;\n  background: #232833; color: #e8e8ea;\n  border: 1px solid #3b4252; border-radius: 20px;\n  padding: .2rem .7rem;\n  font-size: 11px; font-weight: 600;\n  cursor: pointer; white-space: nowrap;\n  box-shadow: 0 3px 10px rgba(0,0,0,.4);\n}\n#mct-jump:hover { border-color: #4b5563; }\n";
   style.textContent += "\n\n/* --- settings row ---------------------------------------------------------\n   Hidden behind the gear. The language picker is a set-once control, so it does\n   not earn permanent space in a 380px header -- but the current language is\n   always visible in the status line below, so the state is never hidden even\n   when the control is. The capture tools live here too: they are meaningless to\n   anyone who is not debugging a selector, and they were crowding out the things\n   people actually press. */\n#mct-settings {\n  display: none;\n  flex: 0 0 auto;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  border-bottom: 1px solid #2a2f3a;\n  background: #11131a;\n}\n#mct-settings.open { display: flex; }\n#mct-settings label { font-size: 11px; color: #9096a3; display: block; margin-bottom: 3px; }\n#mct-lang {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 13px;\n}\n#mct-detected { font-size: 11px; color: #7b8194; }\n#mct-detected b { color: #9096a3; font-weight: 600; }\n#mct-tools { display: flex; flex-wrap: wrap; gap: 4px; }\n#mct-tools button {\n  background: #232833; color: #9096a3; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n#mct-tools button:hover { color: #e8e8ea; }\n\n/* --- scripts --------------------------------------------------------------\n   A font stack per writing system. The Latin defaults render Chinese, Japanese,\n   Korean, Thai and the Indic scripts as tofu or as something a reader can only\n   just make out, and CJK also breaks lines by character rather than by word --\n   so word-break has to be relaxed or every line breaks in the wrong place. */\n.mct-tr.s-arab, .mct-sum-out.s-arab {\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", \"Iranian Sans\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.s-hebr, .mct-sum-out.s-hebr {\n  font-family: \"Segoe UI\", Arial, \"Noto Sans Hebrew\", sans-serif; font-size: 14px;\n}\n.mct-tr.s-hans, .mct-sum-out.s-hans,\n.mct-tr.s-hant, .mct-sum-out.s-hant {\n  font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-jpan, .mct-sum-out.s-jpan {\n  font-family: \"Yu Gothic\", \"Hiragino Sans\", \"Noto Sans CJK JP\", \"Meiryo\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-kore, .mct-sum-out.s-kore {\n  font-family: \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans CJK KR\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n/* Thai and Khmer have no spaces between words, so a browser that breaks on\n   spaces will not break at all and the line runs off the side. */\n.mct-tr.s-thai, .mct-sum-out.s-thai {\n  font-family: \"Leelawadee UI\", \"Noto Sans Thai\", Tahoma, sans-serif;\n  font-size: 15px; word-break: break-all; line-height: 1.8;\n}\n.mct-tr.s-deva, .mct-sum-out.s-deva,\n.mct-tr.s-beng, .mct-sum-out.s-beng,\n.mct-tr.s-guru, .mct-sum-out.s-guru,\n.mct-tr.s-taml, .mct-sum-out.s-taml,\n.mct-tr.s-telu, .mct-sum-out.s-telu {\n  font-family: \"Nirmala UI\", \"Noto Sans\", sans-serif; font-size: 15px; line-height: 1.75;\n}\n.mct-tr.s-armn, .mct-sum-out.s-armn,\n.mct-tr.s-geor, .mct-sum-out.s-geor,\n.mct-tr.s-grek, .mct-sum-out.s-grek,\n.mct-tr.s-cyrl, .mct-sum-out.s-cyrl {\n  font-family: \"Segoe UI\", \"Noto Sans\", sans-serif;\n}\n\n/* Nothing to translate: the reader already speaks the meeting's language, so the\n   translation lane is not drawn at all rather than echoing each line back. */\n#mct-panel.passthrough .mct-tr,\n#mct-panel.passthrough .mct-lat { display: none; }\n";
   style.textContent += "\n\n/* A language change, marked in the flow of the conversation. Everything above it\n   is in the previous language and stays that way; everything below is in the new\n   one. Without the marker the panel just looks inconsistent. */\n.mct-note {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 12px 0 10px;\n  font-size: 11px;\n  color: #9096a3;\n  font-style: italic;\n}\n.mct-note::before, .mct-note::after {\n  content: \"\";\n  flex: 1;\n  height: 1px;\n  background: #2a2f3a;\n}\n.mct-note .t { font-style: normal; color: #6b7280; }\n";
-  style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.passthrough #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
+  style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.why #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
   style.textContent += "\n\n/* A filter is hiding people.\n   It used to announce itself in the status line, which the next caption\n   overwrote a second later -- so a filter left on by a stray click was\n   invisible, and looked like the tool had stopped showing one person. Anything\n   that hides content has to keep saying so for as long as it is hiding it. */\n#mct-filtered {\n  display: none;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  font-size: 11px;\n  color: #c7d2fe;\n  background: rgba(99, 102, 241, .14);\n  border-bottom: 1px solid #2a2f3a;\n}\n#mct-filtered.on { display: flex; }\n#mct-filtered .sp { flex: 1; }\n#mct-filtered button {\n  background: #232833; color: #e8e8ea; border: 1px solid #3b4252;\n  border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n";
   (document.head || document.documentElement).appendChild(style);
 
@@ -560,18 +560,41 @@
          + (error ? " err" : "");
   };
 
+  /**
+   * Why there are no translations, when there are none.
+   *
+   * Both reasons look identical on screen — captions arriving with nothing
+   * underneath them — and both used to be explained only by a clause in a small
+   * grey footer. For someone whose run.sh window got closed, "translator offline
+   * at http://127.0.0.1:8100" is not an instruction.
+   *
+   * The service being down does NOT hide the translation lane: it comes back on
+   * its own, and the lane should be there when it does.
+   */
   function applyPassthrough() {
-    const on = passthrough();
-    panel.classList.toggle("passthrough", on);
-    if (!on) return;
-    // Rebuilt each time so it names the languages currently in play.
+    const pass = passthrough();
+    panel.classList.toggle("passthrough", pass);
+
+    const reason = !server.ok ? "offline" : (pass ? "pass" : "");
+    panel.classList.toggle("why", !!reason);
+    if (!reason) return;
+
     $why.textContent = "";
-    $why.appendChild(el("span", { text: "The captions are already in " }));
-    $why.appendChild(el("b", { text: caption.name || caption.lang }));
-    $why.appendChild(el("span", {
-      text: ", which is the language you have chosen \u2014 so nothing is being "
-          + "translated. Click here to pick a different one.",
-    }));
+    if (reason === "offline") {
+      $why.appendChild(el("span", { text: "The translation companion is not running, so "
+                                        + "nothing is being translated. Start it with " }));
+      $why.appendChild(el("b", { text: "server/run.sh" }));
+      $why.appendChild(el("span", { text: " and leave that window open. Click here to "
+                                        + "try again." }));
+    } else {
+      // Rebuilt each time so it names the languages currently in play.
+      $why.appendChild(el("span", { text: "The captions are already in " }));
+      $why.appendChild(el("b", { text: caption.name || caption.lang }));
+      $why.appendChild(el("span", {
+        text: ", which is the language you have chosen \u2014 so nothing is being "
+            + "translated. Click here to pick a different one.",
+      }));
+    }
   }
 
   function paintDetected() {
@@ -602,7 +625,7 @@
   };
 
   // The banner exists to be acted on, so it is the control as well as the notice.
-  $why.onclick = openSettings;
+  $why.onclick = () => { if (server.ok) openSettings(); else loadConfig(); };
 
   /**
    * Hiding the log and bringing it back.
@@ -621,6 +644,25 @@
     logScroll = $log.scrollTop;
     logStick  = stick;
     $log.style.display = "none";
+  }
+
+  /**
+   * Whether the log is showing, decided in one place.
+   *
+   * Two controls hide it — the Summary tab and the collapse button — and the
+   * collapse button used to keep its own idea of the state. A trip to Summary and
+   * back left the two disagreeing: the log was expanded while the button still
+   * offered to expand it, so the next press flipped only the flag and appeared to
+   * do nothing at all. Deriving both from one place is what stops that.
+   */
+  let liveTab = true, collapsed = false;
+
+  function applyLogVisibility() {
+    if (liveTab && !collapsed) showLog(); else hideLog();
+    const $hide = panel.querySelector("#mct-hide");
+    $hide.textContent = collapsed ? "+" : "\u2013";
+    // There is nothing to collapse while the Summary tab is up.
+    $hide.style.display = liveTab ? "" : "none";
   }
 
   function showLog() {
@@ -660,6 +702,9 @@
     $meta.textContent = bits.join(" · ");
     $dot.classList.toggle("live", !!state.container);
     $dot.classList.toggle("warn", !!state.container && !server.ok);
+    // paintStatus runs on every change to the service's state, which makes it the
+    // one place that reliably knows when the banner needs revisiting.
+    applyPassthrough();
   }
 
   function trimLog() {
@@ -1546,9 +1591,13 @@
     // #mct-speakers is the exception: it keeps "" on purpose, so the `:empty` rule
     // can still hide the chip row before anyone has spoken. An inline value would
     // override that and leave an empty strip.
-    // Via hideLog/showLog rather than setting display directly: the log's scroll
-    // position does not survive being hidden, and has to be put back by hand.
-    if (live) showLog(); else hideLog();
+    liveTab = live;
+    // Clicking "Live" is a request to see the captions, so it also un-collapses.
+    // Arriving at the Live tab to find an empty box and a small "+" is the same
+    // showing-less-without-saying-why that the filter and pass-through banners
+    // exist to prevent.
+    if (live) collapsed = false;
+    applyLogVisibility();
     $chips.style.display = live ? "" : "none";
     $sum.style.display   = live ? "none" : "flex";
     if (!live) syncSpeakerOptions();
@@ -1702,13 +1751,9 @@
     navigator.clipboard.writeText(txt).then(() => meta(`copied ${transcript.length} segments`));
   };
 
-  let hidden = false;
   panel.querySelector("#mct-hide").onclick = () => {
-    hidden = !hidden;
-    // Same reason as the Summary tab: collapsing loses the scroll position unless
-    // it is saved and restored.
-    if (hidden) hideLog(); else showLog();
-    panel.querySelector("#mct-hide").textContent = hidden ? "+" : "–";
+    collapsed = !collapsed;
+    applyLogVisibility();
   };
 
   // Drag by the header — the panel will otherwise cover something important.

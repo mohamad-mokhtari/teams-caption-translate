@@ -111,7 +111,7 @@ def test_extension():
 
     helpers = lift("  const targetRow  =", "\n  /**\n   * Preferences live in extension storage")
     guess   = lift("  function guessTarget(fallback) {", "\n  }\n", "\n  }\n")
-    trclass = lift("  const trClass = (error", "\n\n  function applyPassthrough")
+    trclass = lift("  const trClass = (error", "\n  function applyPassthrough")
 
     c = quickjs.Context()
     c.eval("""

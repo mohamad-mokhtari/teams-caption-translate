@@ -419,6 +419,88 @@ def test_no_reattach_thrash():
     check("  no re-attaches", n, 0)
 
 
+
+def test_collapse_and_tabs():
+    """Collapse and the Summary tab both hide the log, but only one of them owns
+    the collapsed flag."""
+    print("Smoke: collapse, then a trip to Summary and back")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "A sentence so there is something to collapse.")')
+    tick(c, 1500)
+
+    shown = lambda: c.eval('document.querySelector("#mct-log").style.display') != "none"
+    label = lambda: c.eval('document.querySelector("#mct-hide").textContent')
+
+    c.eval('click("#mct-hide")'); tick(c, 50)
+    check("  collapsed", shown(), False)
+    check("  button offers to expand", label(), "+")
+
+    c.eval('click("#mct-tab-sum")');  tick(c, 100)
+    c.eval('click("#mct-tab-live")'); tick(c, 100)
+    # Clicking "Live" is a request to see the captions, so it un-collapses too.
+    check("  log is back after the tabs", shown(), True)
+    # The two controls used to keep separate ideas of this. The button said "+"
+    # over an expanded log, and the next press flipped only the flag.
+    check("  button agrees with what is on screen", label(), "\u2013")
+
+    c.eval('click("#mct-hide")'); tick(c, 50)
+    check("  one press collapses it again", shown(), False)
+
+    print("Smoke: collapse is not offered where it means nothing")
+    c.eval('click("#mct-tab-sum")'); tick(c, 100)
+    check("  hidden on the Summary tab",
+          c.eval('document.querySelector("#mct-hide").style.display'), "none")
+    c.eval('click("#mct-tab-live")'); tick(c, 100)
+    check("  back on Live", c.eval('document.querySelector("#mct-hide").style.display'), "")
+
+
+
+def test_service_down():
+    """What a reader sees when the companion is not running."""
+    print("Smoke: the companion is not running")
+    c = boot('delete routes["/config"]; delete routes["/translate"];')
+    for i in range(3):
+        c.eval(f'say("Sarah", "A sentence number {i} spoken while nothing is listening.")')
+        tick(c, 1500)
+
+    got = json.loads(rows(c))
+    check("  captions still shown", len(got), 3)
+    check("  no translations", [r["tr"] for r in got], ["", "", ""])
+
+    # This used to be explained only by a clause in a small grey footer:
+    # "translator offline at http://127.0.0.1:8100", which is not an instruction
+    # for a colleague whose run.sh window got closed.
+    why = c.eval('document.querySelector("#mct-why").textContent')
+    check("  banner is up",
+          bool(c.eval('document.querySelector("#mct-panel").classList.contains("why")')), True)
+    check("  says what is wrong", "companion is not running" in why, True)
+    check("  says how to fix it", "server/run.sh" in why, True)
+    check("  not confused with pass-through",
+          bool(c.eval('document.querySelector("#mct-panel").classList.contains("passthrough")')),
+          False)
+
+    print("Smoke: and it clears itself when the companion comes back")
+    c.eval("""routes["/config"] = () => ({
+      target_lang: "fa", target_lang_name: "Persian (Farsi)", rtl: true, script: "arab",
+      provider: "openai", context_segments: 3, target_lang_pinned: true,
+      transcript_enabled: false, transcript_dir: "/tmp/x",
+      languages: [{code:"en",name:"English",native:"English",script:"latn",rtl:false},
+                  {code:"fa",name:"Persian (Farsi)",native:"Farsi",script:"arab",rtl:true}],
+    });
+    routes["/translate"] = (b) => ({ translation: "TR:" + b.text, cached: false, ms: 5,
+                                     provider: "openai", key: b.key, passthrough: false });""")
+    tick(c, 16000)          # the reconnect poll runs every 15s
+    check("  banner gone",
+          bool(c.eval('document.querySelector("#mct-panel").classList.contains("why")')), False)
+
+    c.eval('say("Sarah", "A sentence spoken once the companion is back up again.")')
+    tick(c, 1500)
+    got = json.loads(rows(c))
+    check("  translating again", bool(got[-1]["tr"]), True)
+
+
+test_service_down()
+test_collapse_and_tabs()
 test_captions_move()
 test_reconnect_button()
 test_no_reattach_thrash()

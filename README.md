@@ -237,6 +237,21 @@ break lines by character rather than by word; Thai, which has no spaces at all, 
 line in `server/app/languages.py` — the picker builds itself from what the service
 sends.
 
+### When there are no translations
+
+Two different things look identical on screen — captions arriving with nothing
+underneath them — so the panel says which one it is, in a banner that stays up while
+it applies:
+
+| | Banner says |
+|---|---|
+| The companion is not running | *…not running, so nothing is being translated. Start it with `server/run.sh` and leave that window open.* Click to retry |
+| Your language already matches the captions | *The captions are already in English…* Click to pick a different one |
+
+A grey clause in the footer was not enough. `translator offline at
+http://127.0.0.1:8100` is not an instruction for a colleague whose terminal window got
+closed.
+
 ### If captions stop reaching the panel
 
 Teams sometimes rebuilds its caption area mid-meeting, leaving the old element in the
@@ -391,14 +406,13 @@ This exists because two regressions reached a live meeting. It is the only test 
 would have caught either.
 
 ```bash
-pip install quickjs                               # for the extension tests
-python3 tests/syntax_check.py extension/content.js
-server/.venv/bin/python tests/test_panel.py       # panel, scrolling, sizes, dragging, sentences
-server/.venv/bin/python tests/test_language.py    # the language table, pass-through, the picker
-server/.venv/bin/python tests/test_transcript.py  # the Markdown writer
+server/.venv/bin/python -m pip install quickjs
+tests/run_all.sh
 ```
 
-139 checks, all offline — nothing calls a provider, so they run without a key.
+198 checks, all offline — nothing calls a provider, so they run without a key.
+
+
 
 `syntax_check.py` compiles the file inside a function expression that is never
 called, so every syntax error surfaces without a DOM to run against.
