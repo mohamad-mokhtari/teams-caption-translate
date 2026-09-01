@@ -56,7 +56,8 @@ def directory() -> Path:
     return Path(settings.transcript_dir).expanduser().resolve()
 
 
-def _open_session(session_id: str, started_at: str, target_name: str) -> _Session:
+def _open_session(session_id: str, started_at: str, target_name: str,
+                  source: str) -> _Session:
     if not _SAFE_ID.match(session_id):
         raise TranscriptError("bad session id")
 
@@ -74,7 +75,7 @@ def _open_session(session_id: str, started_at: str, target_name: str) -> _Sessio
         header = (
             f"# Meeting transcript\n\n"
             f"- **Started:** {started_at or datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
-            f"- **Source:** Microsoft Teams live captions\n"
+            f"- **Source:** {source}\n"
             f"- **Reading in:** {target_name}\n\n"
             f"---\n\n"
         )
@@ -124,7 +125,7 @@ def _format(seg: dict, sess: _Session) -> str:
 
 
 def append(session_id: str, started_at: str, segments: list[dict],
-           target_name: str = "") -> dict:
+           target_name: str = "", source: str = "") -> dict:
     """
     Append sealed segments to this session's file. Returns where it went.
 
@@ -141,7 +142,12 @@ def append(session_id: str, started_at: str, segments: list[dict],
             # the meeting -- so the header records what it was when the file was
             # opened, and the notes record every change after that.
             sess = _open_session(session_id, started_at,
-                                 target_name or settings.target_lang_name)
+                                 target_name or settings.target_lang_name,
+                                 # The platform is the extension's to report: this
+                                 # service has no idea which meeting tool it is
+                                 # sitting next to, and said "Microsoft Teams" on
+                                 # transcripts of Google Meet calls.
+                                 source or "live meeting captions")
             _sessions[session_id] = sess
 
         chunks, added = [], 0

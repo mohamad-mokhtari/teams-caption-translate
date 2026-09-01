@@ -235,6 +235,7 @@ class TranscriptIn(BaseModel):
     session: str = Field(description="Filename stem: [A-Za-z0-9_-], validated server-side")
     started_at: str = ""
     target_name: str = ""      # the reader's language, for the file header
+    source: str = ""           # which meeting platform these captions came from
     segments: list[Segment] = Field(default_factory=list)
 
 
@@ -262,7 +263,7 @@ def save_transcript(req: TranscriptIn):
     try:
         return TranscriptOut(**append_transcript(
             req.session, req.started_at, [s.model_dump() for s in req.segments],
-            req.target_name))
+            req.target_name, req.source))
     except TranscriptError as e:
         return TranscriptOut(error=str(e), directory=str(transcript_dir()))
     except OSError as e:

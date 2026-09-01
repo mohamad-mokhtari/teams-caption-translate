@@ -329,11 +329,16 @@ def test_it_keeps_going():
         tick(c, 1500)
 
     got = json.loads(rows(c))
-    check("  every line rendered", len(got), len(said))
-    check("  the last line is there",
-          got[-1]["text"] if got else "", said[-1][1])
+    # Rows are sentences now, not caption lines: "Of course. We deploy the new
+    # model on Friday afternoon." arrives as one caption and becomes two segments,
+    # because a finished sentence is never revisited and so its translation never
+    # changes again.
+    joined = " ".join(r["text"] for r in got)
+    for _, what in said:
+        check(f"  {what[:34]!r}...", what in joined, True)
+    check("  the last line is there", got[-1]["text"] if got else "", said[-1][1])
     missing = [r["text"] for r in got if not r["tr"]]
-    check("  every line translated", missing, [])
+    check("  every sentence translated", missing, [])
 
 
 def test_guess_when_nothing_is_configured():
@@ -828,6 +833,66 @@ def test_google_meet_capture():
 
 
 test_platform_table()
+
+def test_meet_appends_to_one_line():
+    """
+    Google Meet does not start a new line while one person keeps talking -- it
+    appends to the same one, for as long as they hold the floor.
+
+    Taken from a real call. Translating "the line" then means retranslating a
+    paragraph that grows every few seconds, so the translation rewrites itself
+    under the reader. Sentences that have finished must never be touched again.
+    """
+    print("Smoke: Meet appends to one growing line")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('location.hostname = "meet.google.com"; detectAnswer = {lang:"en", name:"English"};')
+    c.eval("buildMeetPage();")
+    c.eval(SRC); tick(c, 200)
+
+    # One caption line, growing, exactly as Meet delivered it.
+    growth = [
+        "Hello, everyone.",
+        "Hello, everyone. Uh, my name is Mohammad.",
+        "Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person.",
+        "Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person. "
+        "Other sentence.",
+        "Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person. "
+        "Other sentence. Uh, after stop and speed again.",
+    ]
+    seen = []
+    for step in growth:
+        c.eval(f'meetSay("Mohammad", {json.dumps(step)}, "one")')
+        tick(c, 2500)
+        seen.append(json.loads(c.eval("JSON.stringify(meetRows())")))
+
+    final = seen[-1]
+    check("  one sentence per row", [r["text"] for r in final], [
+        "Hello, everyone.",
+        "Uh, my name is Mohammad.",
+        "And let's stay to join other person.",
+        "Other sentence.",
+        "Uh, after stop and speed again.",
+    ])
+
+    print("Smoke: and a finished sentence is never re-translated")
+    # The whole point. Each snapshot's rows must be a prefix of the next: rows
+    # only ever get added, never rewritten.
+    for before, after in zip(seen, seen[1:]):
+        earlier = [(r["text"], r["tr"]) for r in before]
+        later = [(r["text"], r["tr"]) for r in after][:len(earlier)]
+        check(f"  {len(earlier)} row(s) unchanged by the next growth", later, earlier)
+
+    print("Smoke: each sentence was translated exactly once")
+    asked = json.loads(c.eval(
+        "JSON.stringify(calls.filter(x => x.path === '/translate').map(x => x.body.text))"))
+    check("  no sentence sent twice", len(asked), len(set(asked)))
+    # The whole paragraph is never sent -- that was the bug.
+    check("  the growing paragraph was never sent",
+          [a for a in asked if a.count(".") > 1], [])
+
+
+test_meet_appends_to_one_line()
 test_google_meet_capture()
 test_empty_caption_window()
 test_stalled_capture_is_visible()

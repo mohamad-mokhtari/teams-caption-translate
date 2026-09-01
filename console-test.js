@@ -71,6 +71,44 @@
   const endsSentence = (t) => SENTENCE_END.test(t) && !NOT_A_STOP.test(t);
 
   /**
+   * Cut a caption line into finished sentences plus whatever is still being said.
+   *
+   * This is what makes a growing caption readable. Google Meet does not start a
+   * new line when somebody keeps talking — it appends to the same one, for as
+   * long as they hold the floor. Translating "the line" then means retranslating
+   * a paragraph that gets longer every few seconds, and the Persian rewrites
+   * itself under the reader every time. Teams does the same thing on a smaller
+   * scale whenever a line is extended after a sentence has already closed.
+   *
+   * A finished sentence never changes again, so translating those individually
+   * makes the translation stable: what has been read stays read.
+   */
+  function splitSentences(text) {
+    const complete = [];
+    let start = 0;
+
+    for (let i = 0; i < text.length; i++) {
+      if (!".!?\u2026\u061F".includes(text[i])) continue;
+
+      // Take any closing quote or bracket with it.
+      let end = i + 1;
+      while (end < text.length && "\"'\u2019\u201D\u00BB)]".includes(text[end])) end++;
+
+      // A full stop mid-word is an abbreviation, an initial or a decimal, and
+      // endsSentence already knows the difference.
+      const candidate = text.slice(start, end).trim();
+      if (!candidate || !endsSentence(candidate)) continue;
+      // Must be the end of a word, not "3.5" caught between digits.
+      if (end < text.length && text[end] !== " ") continue;
+
+      complete.push(candidate);
+      start = end;
+      i = end - 1;
+    }
+    return { complete, rest: text.slice(start).trim() };
+  }
+
+  /**
    * Does this meeting's caption stream punctuate at all?
    *
    * Teams' ASR punctuates English well and other languages unevenly, and some
@@ -262,6 +300,7 @@
   const PLATFORMS = [
     {
       name: "teams",
+      label: "Microsoft Teams live captions",
       hosts: /(^|\.)teams\.microsoft\.com$|(^|\.)teams\.live\.com$|(^|\.)cloud\.microsoft$/,
       text: '[data-tid="closed-caption-text"]',
       author: '[data-tid="author"]',
@@ -299,6 +338,7 @@
        * summaries.
        */
       name: "meet",
+      label: "Google Meet live captions",
       hosts: /(^|\.)meet\.google\.com$/,
       // The innermost element holding the words. Ordered: observed class first,
       // then the structural fallback of "a div inside a turn".
@@ -321,6 +361,7 @@
   /** Anything unrecognised gets the generic hooks and the manual buttons. */
   const GENERIC = {
     name: "unknown",
+    label: "live meeting captions",
     text: '[class*="caption"] span, [aria-live] span',
     author: '[class*="author"], [class*="speaker"], [class*="name"]',
     window: '[class*="caption"], [aria-label*="aption"]',
@@ -804,6 +845,12 @@
     applyPassthrough();
   }
 
+  /** Drop a row by key. Used to keep the "still being said" line at the bottom. */
+  function removeRow(key) {
+    const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
+    if (row) row.remove();
+  }
+
   function trimLog() {
     while ($log.children.length > MAX_ROWS) {
       // Rows are dropped from the TOP, which pulls everything below it upwards.
@@ -1234,6 +1281,7 @@
           session: SESSION,
           started_at: STARTED_AT,
           target_name: targetName(),
+          source: PLATFORM.label,
           segments: batch.map(r2 => ({
             id: r2.id, t: r2.t, speaker: r2.speaker,
             text: r2.text, translation: r2.translation,
@@ -1381,7 +1429,10 @@
       // forever. Change is.
       state.lastChange = Date.now();
 
-      render(key, speaker, text, false);             // show at once, greyed
+      // Only the part nobody has translated yet is shown as "still being said".
+      // Showing the whole line would put the growing paragraph back on screen.
+      const already = (prev && text.startsWith(prev.done)) ? prev.done : "";
+      render(key + "#live", speaker, text.slice(already.length).trim(), false);
 
       // A line that has clearly finished is translated after the short window. One
       // that has not is held: any further speech resets this timer, so a sentence
@@ -1392,19 +1443,54 @@
       const timer = setTimeout(() => {
         const cur = state.pending.get(key);
         if (!cur) return;
-        // A line can settle, then be revised again ("What" -> "What country?").
-        // Emit the revision under the SAME key so downstream replaces rather than
-        // appending a second, superseded translation.
+
         // Record whether this line ended cleanly, so `punctuates` can tell a
         // stream that has no punctuation from one that simply has not got there yet.
         punctHistory.push(endsSentence(cur.text));
         if (punctHistory.length > 40) punctHistory.shift();
 
-        emit(key, cur.speaker, cur.text, cur.emitted);
-        cur.emitted = true;
+        /*
+         * Emit whole sentences, and only ones not emitted before.
+         *
+         * `done` is the part of this line already turned into segments. A
+         * finished sentence is never revisited, so its translation never changes
+         * -- which is the entire point on a platform that appends to one line for
+         * as long as somebody keeps talking.
+         */
+        if (!cur.text.startsWith(cur.done)) {
+          // The recogniser went back and changed something it had already settled
+          // on. Carry on from wherever the two still agree rather than emitting
+          // any of it twice: a duplicated line reads worse than a slightly stale
+          // one, and the live row shows the current wording regardless.
+          let i = 0;
+          while (i < cur.text.length && i < cur.done.length && cur.text[i] === cur.done[i]) i++;
+          cur.done = cur.text.slice(0, i);
+        }
+
+        const tail = cur.text.slice(cur.done.length);
+        const { complete, rest } = splitSentences(tail);
+
+        // An unfinished tail is emitted only once the speaker has actually
+        // stopped -- which is what the longer of the two settle windows means. It
+        // becomes its own segment, so carrying on afterwards adds a new one
+        // rather than rewriting this.
+        const stopped = !endsSentence(cur.text) && rest;
+        const parts = stopped ? [...complete, rest] : complete;
+        if (!parts.length) return;
+
+        // Rebuilt after the new segments so it stays at the bottom of the panel.
+        removeRow(key + "#live");
+        for (const sentence of parts) emit(`${key}#${cur.n++}`, cur.speaker, sentence);
+        cur.done = stopped ? cur.text
+                           : cur.text.slice(0, cur.text.length - rest.length);
+        if (!stopped && rest) render(key + "#live", cur.speaker, rest, false);
       }, wait);
 
-      state.pending.set(key, { speaker, text, timer, emitted: prev?.emitted || false });
+      state.pending.set(key, {
+        speaker, text, timer,
+        done: prev?.done || "",   // the part of this line already emitted
+        n: prev?.n || 0,          // how many segments it has produced
+      });
     });
   }
 

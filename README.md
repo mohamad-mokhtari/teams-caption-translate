@@ -372,6 +372,34 @@ someone who now does.
 Chinese to French are low-resource *pairs*, and the model will pivot through English
 internally. Test the pairs you actually need before promising them.
 
+### One row per sentence, not per caption line
+
+A caption line is not an utterance. **Google Meet appends to the same line for as
+long as one person keeps talking** — Teams does the same on a smaller scale whenever
+a line is extended after a sentence has closed. Translating "the line" then means
+retranslating a paragraph that grows every few seconds, and the translation rewrites
+itself under the reader:
+
+```
+Hello, everyone.
+Hello, everyone. Uh, my name is Mohammad.
+Hello, everyone. Uh, my name is Mohammad. And let's stay to join other person.
+   ... one row, retranslated in full, every few seconds
+```
+
+So a finished sentence becomes its own row, and is never touched again:
+
+```
+Hello, everyone.                        → translated once
+Uh, my name is Mohammad.                → translated once
+And let's stay to join other person.    → translated once
+```
+
+What you have already read stays read. Abbreviations, initials and decimals are not
+mistaken for sentence ends (`Dr.`, `e.g.`, `3.5`). An unfinished tail is shown greyed
+and is only committed once the speaker has actually stopped — at which point it too
+becomes its own row, so carrying on afterwards adds a row rather than rewriting one.
+
 ### When a line gets translated
 
 A caption line is translated once it has **stopped changing** *and* **finished a
