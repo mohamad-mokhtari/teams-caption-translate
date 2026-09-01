@@ -892,6 +892,43 @@ def test_meet_appends_to_one_line():
           [a for a in asked if a.count(".") > 1], [])
 
 
+
+def test_revision_across_a_full_stop():
+    """
+    Live recognition revises itself across a full stop it has already produced.
+
+    "Good morning everyone." becomes "Good morning everyone, thanks for joining."
+    a second later. Treating a finished sentence as immutable turned that into two
+    rows, the second of them the fragment ", thanks for joining." -- a regression
+    against Teams, which had worked correctly before sentences existed.
+    """
+    print("Smoke: the recogniser takes back a full stop")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+
+    c.eval('say("Sarah", "Good morning everyone.", "one")')
+    tick(c, 2500)
+    check("  committed as one sentence",
+          [r["text"] for r in json.loads(rows(c))], ["Good morning everyone."])
+
+    c.eval('say("Sarah", "Good morning everyone, thanks for joining.", "one")')
+    tick(c, 2500)
+    got = [r["text"] for r in json.loads(rows(c))]
+    check("  rewritten in place, not appended to",
+          got, ["Good morning everyone, thanks for joining."])
+    check("  no fragment left behind", [t for t in got if t.startswith(",")], [])
+
+    print("Smoke: a revision that merges two sentences back into one")
+    c.eval('say("Reza", "I am done. Thanks.", "two")')
+    tick(c, 2500)
+    check("  two rows", len(json.loads(rows(c))), 3)
+    c.eval('say("Reza", "I am done thanking everybody.", "two")')
+    tick(c, 2500)
+    got = [r["text"] for r in json.loads(rows(c))]
+    check("  merged back to one", got[1:], ["I am done thanking everybody."])
+    check("  the orphan row is gone", [t for t in got if t == "Thanks."], [])
+
+
+test_revision_across_a_full_stop()
 test_meet_appends_to_one_line()
 test_google_meet_capture()
 test_empty_caption_window()

@@ -300,6 +300,11 @@
     {
       name: "teams",
       label: "Microsoft Teams live captions",
+      // One row per finished sentence rather than per caption line. Teams mostly
+      // sends one utterance per line, so this only shows when a line carries two
+      // sentences -- and it is what stops the translation of the first being
+      // rewritten when the second arrives. Set false to keep one row per line.
+      split: true,
       hosts: /(^|\.)teams\.microsoft\.com$|(^|\.)teams\.live\.com$|(^|\.)cloud\.microsoft$/,
       text: '[data-tid="closed-caption-text"]',
       author: '[data-tid="author"]',
@@ -338,6 +343,10 @@
        */
       name: "meet",
       label: "Google Meet live captions",
+      // Not optional here. Meet appends to one line for as long as a person keeps
+      // talking, so without this the whole growing paragraph is one row and is
+      // retranslated every few seconds.
+      split: true,
       hosts: /(^|\.)meet\.google\.com$/,
       // The innermost element holding the words. Ordered: observed class first,
       // then the structural fallback of "a div inside a turn".
@@ -848,6 +857,21 @@
   function removeRow(key) {
     const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (row) row.remove();
+  }
+
+  /**
+   * Undo a segment entirely: its row and its place in the transcript.
+   *
+   * Needed when a revision merges two sentences back into one, which leaves the
+   * higher-numbered one with nothing to hold. Only records that have not been
+   * written to disk yet can be withdrawn — after the seal they are somebody
+   * else's problem, and a stale line is better than a rewritten file.
+   */
+  function dropSegment(key) {
+    removeRow(key);
+    for (let i = transcript.length - 1; i >= 0; i--) {
+      if (transcript[i].key === key && !transcript[i].saved) transcript.splice(i, 1);
+    }
   }
 
   function trimLog() {
@@ -1430,8 +1454,11 @@
 
       // Only the part nobody has translated yet is shown as "still being said".
       // Showing the whole line would put the growing paragraph back on screen.
-      const already = (prev && text.startsWith(prev.done)) ? prev.done : "";
-      render(key + "#live", speaker, text.slice(already.length).trim(), false);
+      // Only the part that has not become a sentence yet is shown as still being
+      // said. Showing the whole line would put the growing paragraph back.
+      const { rest: saying } = PLATFORM.split !== false
+        ? splitSentences(text) : { rest: text };
+      render(key + "#live", speaker, saying, false);
 
       // A line that has clearly finished is translated after the short window. One
       // that has not is held: any further speech resets this timer, so a sentence
@@ -1449,46 +1476,52 @@
         if (punctHistory.length > 40) punctHistory.shift();
 
         /*
-         * Emit whole sentences, and only ones not emitted before.
+         * Split the whole line into sentences, and give each one a row keyed by
+         * its position.
          *
-         * `done` is the part of this line already turned into segments. A
-         * finished sentence is never revisited, so its translation never changes
-         * -- which is the entire point on a platform that appends to one line for
-         * as long as somebody keeps talking.
+         * Keying by position is what makes this safe. Live recognition revises
+         * itself, including across a full stop it has already produced: "Good
+         * morning everyone." becomes "Good morning everyone, thanks for joining."
+         * a second later. Treating a finished sentence as immutable turned that
+         * into two rows, the second of them the fragment ", thanks for joining."
+         *
+         * With positional keys, sentence 0 stays sentence 0 and its row is
+         * rewritten in place -- exactly what happened before sentences existed --
+         * while sentences the speaker has moved past are simply never touched
+         * again. Unchanged ones are skipped, so nothing is retranslated and the
+         * growing-paragraph problem stays fixed.
          */
-        if (!cur.text.startsWith(cur.done)) {
-          // The recogniser went back and changed something it had already settled
-          // on. Carry on from wherever the two still agree rather than emitting
-          // any of it twice: a duplicated line reads worse than a slightly stale
-          // one, and the live row shows the current wording regardless.
-          let i = 0;
-          while (i < cur.text.length && i < cur.done.length && cur.text[i] === cur.done[i]) i++;
-          cur.done = cur.text.slice(0, i);
-        }
+        const { complete, rest } = PLATFORM.split !== false
+          ? splitSentences(cur.text)
+          // A platform can opt out and keep one row per caption line. Positional
+          // keys still apply, so revisions rewrite the row rather than adding one.
+          : { complete: endsSentence(cur.text) ? [cur.text] : [], rest: cur.text };
 
-        const tail = cur.text.slice(cur.done.length);
-        const { complete, rest } = splitSentences(tail);
-
-        // An unfinished tail is emitted only once the speaker has actually
-        // stopped -- which is what the longer of the two settle windows means. It
-        // becomes its own segment, so carrying on afterwards adds a new one
-        // rather than rewriting this.
+        // An unfinished tail is committed only once the speaker has actually
+        // stopped, which is what the longer settle window means.
         const stopped = !endsSentence(cur.text) && rest;
         const parts = stopped ? [...complete, rest] : complete;
-        if (!parts.length) return;
 
-        // Rebuilt after the new segments so it stays at the bottom of the panel.
+        for (let i = 0; i < parts.length; i++) {
+          if (cur.sent[i] === parts[i]) continue;      // unchanged: leave it alone
+          const had = cur.sent[i] !== undefined;
+          emit(`${key}#${i}`, cur.speaker, parts[i], had);
+          cur.sent[i] = parts[i];
+        }
+
+        // A revision can merge two sentences back into one. Drop what is left over
+        // rather than leaving an orphan row and an orphan line in the transcript.
+        for (let i = parts.length; i < cur.sent.length; i++) dropSegment(`${key}#${i}`);
+        cur.sent.length = parts.length;
+
+        // The still-being-said line belongs at the bottom, after the sentences.
         removeRow(key + "#live");
-        for (const sentence of parts) emit(`${key}#${cur.n++}`, cur.speaker, sentence);
-        cur.done = stopped ? cur.text
-                           : cur.text.slice(0, cur.text.length - rest.length);
         if (!stopped && rest) render(key + "#live", cur.speaker, rest, false);
       }, wait);
 
       state.pending.set(key, {
         speaker, text, timer,
-        done: prev?.done || "",   // the part of this line already emitted
-        n: prev?.n || 0,          // how many segments it has produced
+        sent: prev?.sent || [],   // the text of each sentence already emitted
       });
     });
   }

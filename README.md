@@ -397,8 +397,19 @@ And let's stay to join other person.    → translated once
 
 What you have already read stays read. Abbreviations, initials and decimals are not
 mistaken for sentence ends (`Dr.`, `e.g.`, `3.5`). An unfinished tail is shown greyed
-and is only committed once the speaker has actually stopped — at which point it too
-becomes its own row, so carrying on afterwards adds a row rather than rewriting one.
+and is only committed once the speaker has actually stopped.
+
+**Rows are keyed by the sentence's position in the line, not by its text.** That is
+what keeps this safe: live recognition revises itself across a full stop it has
+already produced — *"Good morning everyone."* becomes *"Good morning everyone, thanks
+for joining."* a second later. Positional keys mean sentence 0 stays sentence 0 and
+its row is rewritten in place. Treating a finished sentence as immutable instead
+produced two rows, the second of them the fragment *", thanks for joining."*
+
+**What this changes for Teams:** only that a caption line carrying two sentences
+becomes two rows. Verified by running the same captions through the build before this
+change and the one after: total text identical, every row still attributed, attach
+behaviour identical. `split: false` on a platform entry restores one row per line.
 
 ### When a line gets translated
 
