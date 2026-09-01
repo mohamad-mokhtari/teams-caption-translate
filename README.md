@@ -160,6 +160,7 @@ It stays up for as long as the filter does. Anything that hides content has to k
 saying so — a one-off status message is overwritten by the next caption, and a filter
 left on by a stray click then looks exactly like one person's captions having stopped.
 | **⚙** | Language picker, the detected caption language, and the capture tools |
+| **reconnect captions** (in ⚙) | Find the captions again without reloading the page |
 | **copy** | Whole transcript to the clipboard |
 | **save** | Write the transcript to disk now, without waiting for the timer |
 | **↓ jump to latest** | Appears when you scroll up; takes you back to the newest line |
@@ -235,6 +236,21 @@ break lines by character rather than by word; Thai, which has no spaces at all, 
 `break-all` so lines wrap instead of running off the side. Adding a language is one
 line in `server/app/languages.py` — the picker builds itself from what the service
 sends.
+
+### If captions stop reaching the panel
+
+Teams sometimes rebuilds its caption area mid-meeting, leaving the old element in the
+page with its last few lines still in it. The panel now notices — the signal is caption
+text appearing somewhere it is **not** watching — and re-attaches on its own within a
+second or two.
+
+If it ever does not, **⚙ → reconnect captions** does the same thing by hand: it drops
+the caption element and hunts for it again. That is what reloading the page used to be
+for, minus dropping out of the meeting and losing the transcript.
+
+> The old check asked whether the container still *held* caption text and treated that
+> as proof it was still the live one. It is not, and that state reads as healthy
+> forever — which is why a reload was the only cure.
 
 ### When a language changes
 

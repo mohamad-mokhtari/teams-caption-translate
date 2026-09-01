@@ -344,7 +344,8 @@
         el("button", { id: "mct-diag",  text: "find captions" }),
         el("button", { id: "mct-pick",  text: "pick manually" }),
         el("button", { id: "mct-dump",  text: "dump markup" }),
-        el("button", { id: "mct-retry", text: "reconnect" }),
+        el("button", { id: "mct-retry", text: "reconnect captions",
+                       title: "find the captions again, without reloading the page" }),
       ]),
     ]),
 
@@ -1349,6 +1350,46 @@
   window.__mctFindByText = findByText;
 
   /**
+   * Is `node` inside `root`, crossing shadow boundaries?
+   *
+   * Element.contains stops at a shadow root, and deepQueryAll deliberately does
+   * not — so a caption inside a shadow tree within our own container would look
+   * like it was somewhere else entirely, and the check below would re-attach once
+   * a second forever.
+   */
+  function within(root, node) {
+    let n = node;
+    while (n) {
+      if (n === root) return true;
+      n = n.parentNode || n.host || null;   // .host steps out of a shadow root
+    }
+    return false;
+  }
+
+  /**
+   * Give up on the current caption element and go looking again.
+   *
+   * This is what a page reload does for capture, without the reload — which also
+   * drops you out of the meeting and throws away the transcript.
+   *
+   * Pending settle timers belong to the element being abandoned, so they are
+   * dropped rather than fired: the new container will present the same speech
+   * under new keys, and emitting both would duplicate the last line or two.
+   */
+  function reattach(why) {
+    console.log("[caption] re-attaching:", why);
+    if (state.observer) { state.observer.disconnect(); state.observer = null; }
+    for (const p of state.pending.values()) if (p.timer) clearTimeout(p.timer);
+    state.pending.clear();
+    state.container = null;
+    $dot.classList.remove("live");
+    lastReattach = Date.now();
+    if (!autoFind()) meta(`re-attaching (${why})\u2026`);
+  }
+
+  let lastReattach = 0;
+
+  /**
    * Keep looking, indefinitely.
    *
    * The previous version gave up after 120 tries (~2 minutes) and said so in the
@@ -1388,17 +1429,44 @@
     if (shouldBeOpen !== panelOpen) setPanelOpen(shouldBeOpen);
 
     if (state.container) {
-      // Still attached to something that is still in the page and still holds
-      // captions? Then there is nothing to do.
-      const alive = state.container.isConnected &&
-                    (state.container.querySelector(TEXT_SEL) ||
-                     deepQueryAll(TEXT_SEL, state.container).length ||
-                     state.pending.size);
+      // Gone from the page entirely. Unambiguous, so act at once.
+      if (!state.container.isConnected) {
+        meta("caption panel was replaced \u2014 re-attaching\u2026");
+        reattach("container removed");
+        return;
+      }
+
+      /*
+       * Attached to the wrong element.
+       *
+       * The old check asked whether our container still HELD caption text, and
+       * treated that as proof it was still the live one. It is not: Teams can
+       * start writing captions into a new element while the old one stays in the
+       * page with its last few lines still in it. That reads as healthy forever,
+       * so the panel went quiet and only reloading the page brought it back —
+       * which also drops you out of the meeting.
+       *
+       * Caption text somewhere we are NOT watching is the actual signal.
+       */
+      const stray = deepQueryAll(TEXT_SEL)
+        .filter(e => !isOurs(e) && !within(state.container, e));
+
+      // Rate-limited: if autoFind picks the same wrong element again this would
+      // otherwise re-attach every second for the rest of the meeting.
+      if (stray.length && Date.now() - lastReattach > 5000) {
+        meta("captions moved \u2014 re-attaching\u2026");
+        reattach("captions moved");
+        return;
+      }
+      if (stray.length) return;   // waiting out the backoff
+
+      const alive = state.container.querySelector(TEXT_SEL) ||
+                    deepQueryAll(TEXT_SEL, state.container).length ||
+                    state.pending.size;
       if (alive) return;
-      console.log("[caption] container went stale — re-attaching");
-      meta("caption panel changed — re-attaching…");
-      state.container = null;
-      if (state.observer) state.observer.disconnect();
+      meta("caption panel changed \u2014 re-attaching\u2026");
+      reattach("container went empty");
+      return;
     }
 
     if (autoFind()) return;
@@ -1586,9 +1654,20 @@
     );
   };
 
+  /**
+   * What the reload used to be for.
+   *
+   * This button only re-checked the translation service, which was almost never
+   * the thing that had failed — so pressing it when captions stopped did nothing
+   * visible, and the only cure left was reloading the page and rejoining the
+   * meeting. It now does both halves: drop the caption element and hunt for it
+   * again, and re-check the service.
+   */
   panel.querySelector("#mct-retry").onclick = () => {
-    meta("reconnecting to translator…");
+    lastReattach = 0;                    // an explicit press ignores the backoff
+    reattach("asked to");
     loadConfig();
+    meta(state.container ? "reconnected" : "looking for captions\u2026");
   };
 
   panel.querySelector("#mct-dump").onclick = () => {

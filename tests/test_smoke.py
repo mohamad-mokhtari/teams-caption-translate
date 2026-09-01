@@ -31,7 +31,7 @@ def check(label, got, want):
 
 PAGE = """
 // A Teams caption area, in the markup content.js was built against.
-const ccWindow = document.createElement("div");
+let ccWindow = document.createElement("div");
 ccWindow.setAttribute("data-tid", "closed-caption-v2-window");
 document.body.appendChild(ccWindow);
 
@@ -70,6 +70,19 @@ function panelRows() {
     tr:      r.querySelector(".mct-tr").textContent,
   }));
 }
+/**
+ * Throw away the caption area and build a new one, leaving the old node in the
+ * page with its last lines still in it -- which is what Teams does, and what made
+ * the old liveness check believe everything was fine forever.
+ */
+function moveCaptionsToANewContainer() {
+  ccWindow.removeAttribute("data-tid");     // the old one stops being the live one
+  ccWindow = document.createElement("div");
+  ccWindow.setAttribute("data-tid", "closed-caption-v2-window");
+  document.body.appendChild(ccWindow);
+  for (const k of Object.keys(lines)) delete lines[k];
+}
+
 /** Rows the reader can actually see, ignoring any a filter hid. */
 function visibleRows() {
   const log = document.querySelector("#mct-log");
@@ -343,6 +356,72 @@ def test_filter_survives_summary():
           ["Mohamad", "Reza"])
 
 
+
+def test_captions_move():
+    """
+    Reported from a real meeting: captions kept appearing in Teams but stopped
+    reaching the panel, and only reloading the page and rejoining fixed it.
+
+    Teams can start writing captions into a new element while the old one stays
+    in the page holding its last few lines. The old check asked whether our
+    container still HELD caption text and read that as healthy -- so it never
+    looked for the new one.
+    """
+    print("Smoke: Teams moves its captions to a new element")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "This is the first sentence, before anything moves.")')
+    tick(c, 1500)
+    check("  captured before", len(json.loads(rows(c))), 1)
+
+    c.eval("moveCaptionsToANewContainer()")
+    tick(c, 2000)
+    c.eval('say("Sarah", "And this one arrives after Teams rebuilt the caption area.")')
+    tick(c, 2000)
+
+    got = json.loads(rows(c))
+    check("  captured after the move", len(got), 2)
+    check("  the new line is there",
+          got[-1]["text"] if got else "",
+          "And this one arrives after Teams rebuilt the caption area.")
+    check("  and it was translated", bool(got and got[-1]["tr"]), True)
+
+
+def test_reconnect_button():
+    """The button used to re-check the translator only, which was never the thing
+    that had broken."""
+    print("Smoke: the reconnect button re-finds the captions")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "One sentence to get us attached to something.")')
+    tick(c, 1500)
+
+    c.eval("moveCaptionsToANewContainer()")
+    c.eval('click("#mct-retry")')
+    tick(c, 300)
+    c.eval('say("Sarah", "A sentence right after pressing reconnect.")')
+    tick(c, 1500)
+
+    got = json.loads(rows(c))
+    check("  back to capturing", len(got), 2)
+    check("  without a page reload", got[-1]["text"] if got else "",
+          "A sentence right after pressing reconnect.")
+
+
+def test_no_reattach_thrash():
+    """A shadow-piercing search must not mistake our own container's contents for
+    captions living somewhere else."""
+    print("Smoke: a healthy meeting does not re-attach on a loop")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval("logLines.length = 0;")
+    for i in range(5):
+        c.eval(f'say("Sarah", "An ordinary sentence, number {i}, in a healthy meeting.")')
+        tick(c, 1500)
+    n = c.eval('logLines.filter(l => l[1].indexOf("re-attaching") >= 0).length')
+    check("  no re-attaches", n, 0)
+
+
+test_captions_move()
+test_reconnect_button()
+test_no_reattach_thrash()
 test_summary_round_trip()
 test_filter_survives_summary()
 test_captions_reach_the_panel()

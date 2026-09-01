@@ -100,6 +100,9 @@ class Node {
   get innerText() { return this.textContent; }
 
   get firstChild() { return this.children[0] || null; }
+  get parentNode() { return this.parentElement; }
+  contains(n) { while (n) { if (n === this) return true; n = n.parentElement; } return false; }
+  removeAttribute(k) { delete this.attributes[k]; }
   get isConnected() {
     let n = this; while (n.parentElement) n = n.parentElement;
     return n === document.documentElement || n === document;
