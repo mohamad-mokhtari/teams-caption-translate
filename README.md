@@ -154,6 +154,11 @@ and opening it by hand is not undone a second later by the poller.
 | **⤡** | Cycles **small → large → full screen**. The tooltip names the next one. `Esc` leaves full screen. Drag the bottom-right corner for any size in between |
 | **–** | Collapse to the title bar |
 | Speaker chips | Colour key **and** filter — click a name to see only that person, **All** to go back |
+
+While a filter is on, a banner says whose lines are hidden and offers **show everyone**.
+It stays up for as long as the filter does. Anything that hides content has to keep
+saying so — a one-off status message is overwritten by the next caption, and a filter
+left on by a stray click then looks exactly like one person's captions having stopped.
 | **⚙** | Language picker, the detected caption language, and the capture tools |
 | **copy** | Whole transcript to the clipboard |
 | **save** | Write the transcript to disk now, without waiting for the timer |

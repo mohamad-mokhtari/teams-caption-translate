@@ -70,6 +70,21 @@ function panelRows() {
     tr:      r.querySelector(".mct-tr").textContent,
   }));
 }
+/** Rows the reader can actually see, ignoring any a filter hid. */
+function visibleRows() {
+  const log = document.querySelector("#mct-log");
+  if (!log) return [];
+  return log.querySelectorAll(".mct-seg")
+    .filter(r => r.style.display !== "none")
+    .map(r => ({ speaker: r.querySelector(".mct-spk").textContent,
+                 text: r.querySelector(".mct-txt").textContent }));
+}
+function click(sel) { const n = document.querySelector(sel); if (n && n.onclick) n.onclick(); }
+function clickChip(name) {
+  for (const c of document.querySelectorAll(".mct-chip"))
+    if (c.textContent.startsWith(name)) { c.onclick(); return true; }
+  return false;
+}
 function panelNotes() {
   const log = document.querySelector("#mct-log");
   return log ? log.querySelectorAll(".mct-note").map(n => n.textContent) : [];
@@ -250,6 +265,86 @@ def test_passthrough():
     check("  offers the way out", "pick a different one" in why, True)
 
 
+
+def test_summary_round_trip():
+    """
+    Reported from a real meeting: after showing a colleague the Summary tab and
+    coming back, only one person's new captions appeared.
+    """
+    print("Smoke: two speakers, a trip to Summary, and back")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+
+    for who, what in [("Mohamad", "Good morning, can everybody hear me clearly today?"),
+                      ("Reza",    "Yes, I can hear you perfectly well thank you.")]:
+        c.eval(f'say("{who}", "{what}")')
+        tick(c, 1500)
+    check("  both speakers before", len(json.loads(c.eval("JSON.stringify(visibleRows())"))), 2)
+
+    c.eval('click("#mct-tab-sum")');  tick(c, 300)
+    c.eval('click("#mct-tab-live")'); tick(c, 300)
+
+    for who, what in [("Mohamad", "Right, let me carry on with the next point please."),
+                      ("Reza",    "Sure, go ahead, I am following along with you.")]:
+        c.eval(f'say("{who}", "{what}")')
+        tick(c, 1500)
+
+    seen = json.loads(c.eval("JSON.stringify(visibleRows())"))
+    check("  all four visible after", len(seen), 4)
+    check("  both speakers still visible",
+          sorted({r["speaker"] for r in seen}), ["Mohamad", "Reza"])
+
+
+def test_filter_survives_summary():
+    """The same trip, but with a speaker filter deliberately left on."""
+    print("Smoke: a filter left on, then Summary and back")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    for who, what in [("Mohamad", "Good morning, can everybody hear me clearly today?"),
+                      ("Reza",    "Yes, I can hear you perfectly well thank you.")]:
+        c.eval(f'say("{who}", "{what}")')
+        tick(c, 1500)
+
+    c.eval('clickChip("Reza")'); tick(c, 100)
+    check("  filtered to Reza", len(json.loads(c.eval("JSON.stringify(visibleRows())"))), 1)
+
+    c.eval('click("#mct-tab-sum")');  tick(c, 300)
+    c.eval('click("#mct-tab-live")'); tick(c, 300)
+    c.eval('say("Mohamad", "Another sentence from me while the filter is still on.")')
+    tick(c, 1500)
+
+    seen = json.loads(c.eval("JSON.stringify(visibleRows())"))
+    check("  still Reza only", sorted({r["speaker"] for r in seen}), ["Reza"])
+    check("  the chip still says so",
+          bool(c.eval('document.querySelectorAll(".mct-chip").some('
+                      'x => x.textContent.startsWith("Reza") && x.classList.contains("on"))')), True)
+
+    print("Smoke: a filter keeps saying who it is hiding")
+    # It used to say so in the status line, which emit() rewrites on every
+    # caption -- so a filter left on by a stray click on the chip row became
+    # invisible within a second, and looked like one person's captions had
+    # stopped arriving.
+    check("  banner is up",
+          bool(c.eval('document.querySelector("#mct-filtered").classList.contains("on")')), True)
+    check("  names who",
+          "Showing only Reza" in c.eval('document.querySelector("#mct-filtered-txt").textContent'), True)
+
+    c.eval('say("Reza", "A few more sentences go by while the filter is still set.")')
+    tick(c, 1500)
+    c.eval('say("Reza", "And another one after that, just to be sure about it.")')
+    tick(c, 1500)
+    check("  still up several captions later",
+          bool(c.eval('document.querySelector("#mct-filtered").classList.contains("on")')), True)
+
+    print("Smoke: and offers the way out")
+    c.eval('click("#mct-filtered-clear")'); tick(c, 100)
+    check("  banner gone",
+          bool(c.eval('document.querySelector("#mct-filtered").classList.contains("on")')), False)
+    check("  everyone back",
+          sorted({r["speaker"] for r in json.loads(c.eval("JSON.stringify(visibleRows())"))}),
+          ["Mohamad", "Reza"])
+
+
+test_summary_round_trip()
+test_filter_survives_summary()
 test_captions_reach_the_panel()
 test_it_keeps_going()
 test_guess_when_nothing_is_configured()

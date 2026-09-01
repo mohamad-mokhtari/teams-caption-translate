@@ -287,6 +287,7 @@
   style.textContent += "\n\n/* --- settings row ---------------------------------------------------------\n   Hidden behind the gear. The language picker is a set-once control, so it does\n   not earn permanent space in a 380px header -- but the current language is\n   always visible in the status line below, so the state is never hidden even\n   when the control is. The capture tools live here too: they are meaningless to\n   anyone who is not debugging a selector, and they were crowding out the things\n   people actually press. */\n#mct-settings {\n  display: none;\n  flex: 0 0 auto;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  border-bottom: 1px solid #2a2f3a;\n  background: #11131a;\n}\n#mct-settings.open { display: flex; }\n#mct-settings label { font-size: 11px; color: #9096a3; display: block; margin-bottom: 3px; }\n#mct-lang {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 13px;\n}\n#mct-detected { font-size: 11px; color: #7b8194; }\n#mct-detected b { color: #9096a3; font-weight: 600; }\n#mct-tools { display: flex; flex-wrap: wrap; gap: 4px; }\n#mct-tools button {\n  background: #232833; color: #9096a3; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n#mct-tools button:hover { color: #e8e8ea; }\n\n/* --- scripts --------------------------------------------------------------\n   A font stack per writing system. The Latin defaults render Chinese, Japanese,\n   Korean, Thai and the Indic scripts as tofu or as something a reader can only\n   just make out, and CJK also breaks lines by character rather than by word --\n   so word-break has to be relaxed or every line breaks in the wrong place. */\n.mct-tr.s-arab, .mct-sum-out.s-arab {\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", \"Iranian Sans\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.s-hebr, .mct-sum-out.s-hebr {\n  font-family: \"Segoe UI\", Arial, \"Noto Sans Hebrew\", sans-serif; font-size: 14px;\n}\n.mct-tr.s-hans, .mct-sum-out.s-hans,\n.mct-tr.s-hant, .mct-sum-out.s-hant {\n  font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-jpan, .mct-sum-out.s-jpan {\n  font-family: \"Yu Gothic\", \"Hiragino Sans\", \"Noto Sans CJK JP\", \"Meiryo\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-kore, .mct-sum-out.s-kore {\n  font-family: \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans CJK KR\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n/* Thai and Khmer have no spaces between words, so a browser that breaks on\n   spaces will not break at all and the line runs off the side. */\n.mct-tr.s-thai, .mct-sum-out.s-thai {\n  font-family: \"Leelawadee UI\", \"Noto Sans Thai\", Tahoma, sans-serif;\n  font-size: 15px; word-break: break-all; line-height: 1.8;\n}\n.mct-tr.s-deva, .mct-sum-out.s-deva,\n.mct-tr.s-beng, .mct-sum-out.s-beng,\n.mct-tr.s-guru, .mct-sum-out.s-guru,\n.mct-tr.s-taml, .mct-sum-out.s-taml,\n.mct-tr.s-telu, .mct-sum-out.s-telu {\n  font-family: \"Nirmala UI\", \"Noto Sans\", sans-serif; font-size: 15px; line-height: 1.75;\n}\n.mct-tr.s-armn, .mct-sum-out.s-armn,\n.mct-tr.s-geor, .mct-sum-out.s-geor,\n.mct-tr.s-grek, .mct-sum-out.s-grek,\n.mct-tr.s-cyrl, .mct-sum-out.s-cyrl {\n  font-family: \"Segoe UI\", \"Noto Sans\", sans-serif;\n}\n\n/* Nothing to translate: the reader already speaks the meeting's language, so the\n   translation lane is not drawn at all rather than echoing each line back. */\n#mct-panel.passthrough .mct-tr,\n#mct-panel.passthrough .mct-lat { display: none; }\n";
   style.textContent += "\n\n/* A language change, marked in the flow of the conversation. Everything above it\n   is in the previous language and stays that way; everything below is in the new\n   one. Without the marker the panel just looks inconsistent. */\n.mct-note {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 12px 0 10px;\n  font-size: 11px;\n  color: #9096a3;\n  font-style: italic;\n}\n.mct-note::before, .mct-note::after {\n  content: \"\";\n  flex: 1;\n  height: 1px;\n  background: #2a2f3a;\n}\n.mct-note .t { font-style: normal; color: #6b7280; }\n";
   style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.passthrough #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
+  style.textContent += "\n\n/* A filter is hiding people.\n   It used to announce itself in the status line, which the next caption\n   overwrote a second later -- so a filter left on by a stray click was\n   invisible, and looked like the tool had stopped showing one person. Anything\n   that hides content has to keep saying so for as long as it is hiding it. */\n#mct-filtered {\n  display: none;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  font-size: 11px;\n  color: #c7d2fe;\n  background: rgba(99, 102, 241, .14);\n  border-bottom: 1px solid #2a2f3a;\n}\n#mct-filtered.on { display: flex; }\n#mct-filtered .sp { flex: 1; }\n#mct-filtered button {\n  background: #232833; color: #e8e8ea; border: 1px solid #3b4252;\n  border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -325,6 +326,12 @@
 
     // Why nothing is being translated. Only visible while that is the case.
     el("div", { id: "mct-why" }),
+
+    // Who is being hidden. Only visible while somebody is.
+    el("div", { id: "mct-filtered" }, [
+      el("span", { id: "mct-filtered-txt", cls: "sp" }),
+      el("button", { id: "mct-filtered-clear", text: "show everyone" }),
+    ]),
 
     // Language, and the capture tools. Hidden until the gear is pressed.
     el("div", { id: "mct-settings" }, [
@@ -468,7 +475,10 @@
   const $settings = panel.querySelector("#mct-settings");
   const $lang     = panel.querySelector("#mct-lang");
   const $detected = panel.querySelector("#mct-detected");
-  const $why      = panel.querySelector("#mct-why");
+  const $why         = panel.querySelector("#mct-why");
+  const $filtered    = panel.querySelector("#mct-filtered");
+  const $filteredTxt = panel.querySelector("#mct-filtered-txt");
+  panel.querySelector("#mct-filtered-clear").onclick = () => setFilter("");
 
   // ---------- language ------------------------------------------------------
 
@@ -719,8 +729,23 @@
       row.style.display = (!name || row.dataset.spk === name) ? "" : "none";
     }
     renderChips();
-    meta(name ? `showing only ${name}` : "showing everyone");
+    paintFilter();
     toBottom(true);
+  }
+
+  /**
+   * Say who is being hidden, for as long as they are hidden.
+   *
+   * This used to be a status-line message, and emit() rewrites that line on every
+   * caption — so it lasted about a second. A filter set by a stray click on the
+   * chip row (which sits directly above the log) then looked exactly like the tool
+   * having stopped showing one person, with nothing on screen to explain it.
+   */
+  function paintFilter() {
+    $filtered.classList.toggle("on", !!speakerFilter);
+    if (speakerFilter) {
+      $filteredTxt.textContent = `Showing only ${speakerFilter} — everyone else is hidden.`;
+    }
   }
 
   /** Record what a speaker said, and keep the chips and dropdown in step. */
