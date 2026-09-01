@@ -85,8 +85,23 @@ function meetSay(speaker, text, id) {
   if (!turn) {
     turn = document.createElement("div");
     turn.className = "nMcdL bj4p3b";
+    // The speaker block, exactly as observed: an avatar that contributes no text,
+    // then the name nested two deep.
+    const who = document.createElement("div");
+    who.className = "adE6rb";
+    const avatar = document.createElement("img");
+    avatar.className = "Z6byG r6DyN";
+    const nameBox = document.createElement("div");
+    nameBox.className = "KcIKyf jxFHg";
+    const name = document.createElement("span");
+    name.className = "NWpY1d";
+    name.textContent = speaker;
+    nameBox.appendChild(name);
+    who.appendChild(avatar);
+    who.appendChild(nameBox);
     const words = document.createElement("div");
     words.className = "ygicle VbkSUe";
+    turn.appendChild(who);
     turn.appendChild(words);
     meetRegion.appendChild(turn);
     meetTurns[id] = turn;
@@ -822,9 +837,7 @@ def test_google_meet_capture():
     check("  never let go of the container",
           "re-attaching" in c.eval('logLines.map(l => l[1]).join(" | ")'), False)
 
-    # Known gap, asserted so it cannot be forgotten: where Meet puts the speaker's
-    # name is still unknown, so lines are captured but attributed to nobody.
-    check("  speaker not yet attributed", {r["speaker"] for r in got}, {""})
+    check("  attributed to the speaker", {r["speaker"] for r in got}, {"Sarah"})
 
 
 test_platform_table()
@@ -954,6 +967,48 @@ def test_meet_revision_across_a_full_stop():
 test_teams_is_not_split()
 test_meet_revision_across_a_full_stop()
 test_meet_appends_to_one_line()
+
+def test_meet_two_speakers():
+    """
+    Meet gives each speaker their own turn block, and each block grows while that
+    person holds the floor.
+    """
+    print("Smoke: two people talking on Meet")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('location.hostname = "meet.google.com"; detectAnswer = {lang:"en", name:"English"};')
+    c.eval("buildMeetPage();")
+    c.eval(SRC); tick(c, 200)
+
+    # Exactly the shape a real call produced: one block per person, each appending.
+    c.eval('meetSay("mohamad mokhtari", "Hello, everyone.", "a")'); tick(c, 2500)
+    c.eval('meetSay("mohamad mokhtari", "Hello, everyone. My name is Muhammad.", "a")')
+    tick(c, 2500)
+    c.eval('meetSay("You", "Second speaker.", "b")'); tick(c, 2500)
+    c.eval('meetSay("You", "Second speaker. That I am starting.", "b")'); tick(c, 2500)
+
+    got = json.loads(c.eval("JSON.stringify(meetRows())"))
+    check("  both people named",
+          [(r["speaker"], r["text"]) for r in got], [
+              ("mohamad mokhtari", "Hello, everyone."),
+              ("mohamad mokhtari", "My name is Muhammad."),
+              ("You", "Second speaker."),
+              ("You", "That I am starting."),
+          ])
+
+    print("Smoke: and the speaker chips follow")
+    chips = json.loads(c.eval(
+        'JSON.stringify(document.querySelectorAll(".mct-chip").map(x => x.textContent))'))
+    check("  a chip each, plus All", len(chips), 3)
+    check("  named", sorted(chips)[1:], ["You (2)", "mohamad mokhtari (2)"])
+
+    print("Smoke: the avatar image contributes no text to the name")
+    # The name sits two levels below the speaker block, next to an <img>. Reading
+    # the block's text must not pick up anything from the avatar.
+    check("  clean names", [r["speaker"] for r in got if r["speaker"].strip() != r["speaker"]], [])
+
+
+test_meet_two_speakers()
 test_google_meet_capture()
 test_empty_caption_window()
 test_stalled_capture_is_visible()

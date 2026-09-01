@@ -352,10 +352,26 @@
       // The innermost element holding the words. Ordered: observed class first,
       // then the structural fallback of "a div inside a turn".
       text: 'div.ygicle, div.nMcdL > div:last-child',
-      // Not yet known. Left deliberately narrow rather than broad: a wrong author
-      // selector attributes everyone's speech to one person, which is worse than
-      // attributing it to nobody.
-      author: 'div.nMcdL [data-speaker-name], div.zs7s8d',
+      /*
+       * The speaker. Observed inside a turn:
+       *
+       *   div.nMcdL.bj4p3b
+       *     div.adE6rb            <- this, whose text is just the name
+       *       img.Z6byG           avatar, contributes no text
+       *       div.KcIKyf.jxFHg
+       *         span.NWpY1d       "You" / "mohamad mokhtari"
+       *     div.ygicle.VbkSUe     the words
+       *
+       * The structural fallback is the real safety net: within a turn the speaker
+       * block is the first child and the words are the last. That survives the
+       * next time Google regenerates its class names, which it will.
+       *
+       * Meet writes "You" for the local participant, and that is left as it
+       * stands -- it is what Meet says, and inventing a name for the person
+       * reading their own transcript would be worse than repeating Meet's word
+       * for it.
+       */
+      author: 'div.adE6rb, div.nMcdL > div:first-child',
       window: 'div[jsname="dsyhDe"], [role="region"][aria-label*="aption"], div.a4cQT',
       candidates: [
         'div[jsname="dsyhDe"]',
@@ -363,7 +379,7 @@
         'div.a4cQT',
         'div.nMcdL',
       ],
-      verified: "2026-09-01, except the speaker name",
+      verified: "2026-09-01, including the speaker",
     },
   ];
 

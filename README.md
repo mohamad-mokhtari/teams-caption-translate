@@ -146,13 +146,19 @@ div.a4cQT.P9KVBf
  └ div.iOzk7 [jsname="dsyhDe"]
     └ div [role="region"][aria-label="Captions"]     the caption area
        └ div.nMcdL.bj4p3b                            one speaker's turn
+          ├ div.adE6rb                               the speaker
+          │  ├ img.Z6byG                             avatar, no text
+          │  └ div.KcIKyf.jxFHg > span.NWpY1d        "You" / "mohamad mokhtari"
           └ div.ygicle.VbkSUe                        the words
 ```
 
-Captions are captured and translated. **Speakers are not**: where Meet puts the
-name inside a turn is still unknown, so lines are attributed to nobody — which
-costs the speaker colours, the per-speaker filter and the summaries. Everything
-else works.
+Captions, speakers, colours, the per-speaker filter and summaries all work. Meet
+writes **"You"** for the local participant, and that is left as it stands — it is
+what Meet says, and inventing a name for the person reading their own transcript
+would be worse than repeating Meet's word for it.
+
+Each person gets **one turn block that grows** while they hold the floor, which is
+why sentence splitting exists (below) and why it is on for Meet and off for Teams.
 
 Every class name there is compiler-generated and will change without notice, so
 they are last resorts. `jsname` is generated too but changes far less often, and
@@ -160,11 +166,16 @@ they are last resorts. `jsname` is generated too but changes far less often, and
 is **localised** ("Sous-titres" in French), so it can be a hint and never the sole
 selector.
 
-To close the speaker gap, run [`tools/probe.js`](tools/probe.js) in a Meet call
-**with two people talking**. It reads the page and nothing else: no network, no
-changes to the meeting. It finds the captions **by their content** rather than by
-guessing a selector — which is the point, since a guess is what it exists to
-replace.
+Every class name there is generated and will change. The selectors try them first
+and fall back to **structure** — inside a turn, the speaker block is the first child
+and the words are the last — which is what will survive the next time Google
+regenerates them.
+
+If Meet ever stops working, [`tools/probe.js`](tools/probe.js) is how it was worked
+out: paste it into the console of a live call and it reports the markup around words
+that were actually spoken. It reads the page and nothing else — no network, no
+changes to the meeting — and finds the captions **by their content** rather than by
+guessing a selector.
 
 The console log names the platform and says whether anyone has checked it:
 
