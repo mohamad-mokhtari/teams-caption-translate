@@ -372,13 +372,15 @@ someone who now does.
 Chinese to French are low-resource *pairs*, and the model will pivot through English
 internally. Test the pairs you actually need before promising them.
 
-### One row per sentence, not per caption line
+### One row per sentence — on Meet only
 
-A caption line is not an utterance. **Google Meet appends to the same line for as
-long as one person keeps talking** — Teams does the same on a smaller scale whenever
-a line is extended after a sentence has closed. Translating "the line" then means
-retranslating a paragraph that grows every few seconds, and the translation rewrites
-itself under the reader:
+**Teams is not split, deliberately.** Teams already breaks its captions where the
+speaker actually paused, so splitting them again second-guesses something that is
+already right. One caption line stays one row there, exactly as it always has.
+
+**Google Meet appends to the same line for as long as one person keeps talking.**
+Translating "the line" then means retranslating a paragraph that grows every few
+seconds, and the translation rewrites itself under the reader:
 
 ```
 Hello, everyone.
@@ -406,10 +408,11 @@ for joining."* a second later. Positional keys mean sentence 0 stays sentence 0 
 its row is rewritten in place. Treating a finished sentence as immutable instead
 produced two rows, the second of them the fragment *", thanks for joining."*
 
-**What this changes for Teams:** only that a caption line carrying two sentences
-becomes two rows. Verified by running the same captions through the build before this
-change and the one after: total text identical, every row still attributed, attach
-behaviour identical. `split: false` on a platform entry restores one row per line.
+**Nothing here reaches Teams.** `split: false` on its platform entry, and running
+identical Teams captions through the build before this work and the one after gives
+byte-for-byte the same rows, the same translator calls and the same attach
+behaviour. A test holds Teams to one row per caption line so Meet's needs cannot
+follow it back.
 
 ### When a line gets translated
 

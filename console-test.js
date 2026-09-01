@@ -301,11 +301,11 @@
     {
       name: "teams",
       label: "Microsoft Teams live captions",
-      // One row per finished sentence rather than per caption line. Teams mostly
-      // sends one utterance per line, so this only shows when a line carries two
-      // sentences -- and it is what stops the translation of the first being
-      // rewritten when the second arrives. Set false to keep one row per line.
-      split: true,
+      // OFF for Teams, deliberately. Teams already breaks its captions at good
+      // points -- one utterance per line, split where a person actually paused --
+      // so splitting again second-guesses something that is already right. This
+      // exists for Google Meet, which does not break lines at all.
+      split: false,
       hosts: /(^|\.)teams\.microsoft\.com$|(^|\.)teams\.live\.com$|(^|\.)cloud\.microsoft$/,
       text: '[data-tid="closed-caption-text"]',
       author: '[data-tid="author"]',
@@ -1457,8 +1457,7 @@
       // Showing the whole line would put the growing paragraph back on screen.
       // Only the part that has not become a sentence yet is shown as still being
       // said. Showing the whole line would put the growing paragraph back.
-      const { rest: saying } = PLATFORM.split !== false
-        ? splitSentences(text) : { rest: text };
+      const { rest: saying } = PLATFORM.split ? splitSentences(text) : { rest: text };
       render(key + "#live", speaker, saying, false);
 
       // A line that has clearly finished is translated after the short window. One
@@ -1492,11 +1491,13 @@
          * again. Unchanged ones are skipped, so nothing is retranslated and the
          * growing-paragraph problem stays fixed.
          */
-        const { complete, rest } = PLATFORM.split !== false
+        // A platform that already breaks its captions well keeps one row per
+        // line. Positional keys still apply, so a revision rewrites that row
+        // rather than adding another.
+        const { complete, rest } = PLATFORM.split
           ? splitSentences(cur.text)
-          // A platform can opt out and keep one row per caption line. Positional
-          // keys still apply, so revisions rewrite the row rather than adding one.
-          : { complete: endsSentence(cur.text) ? [cur.text] : [], rest: cur.text };
+          : (endsSentence(cur.text) ? { complete: [cur.text], rest: "" }
+                                    : { complete: [], rest: cur.text });
 
         // An unfinished tail is committed only once the speaker has actually
         // stopped, which is what the longer settle window means.

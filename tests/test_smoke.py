@@ -329,16 +329,11 @@ def test_it_keeps_going():
         tick(c, 1500)
 
     got = json.loads(rows(c))
-    # Rows are sentences now, not caption lines: "Of course. We deploy the new
-    # model on Friday afternoon." arrives as one caption and becomes two segments,
-    # because a finished sentence is never revisited and so its translation never
-    # changes again.
-    joined = " ".join(r["text"] for r in got)
-    for _, what in said:
-        check(f"  {what[:34]!r}...", what in joined, True)
+    # One row per caption line on Teams -- see test_teams_is_not_split.
+    check("  every line rendered", len(got), len(said))
     check("  the last line is there", got[-1]["text"] if got else "", said[-1][1])
     missing = [r["text"] for r in got if not r["tr"]]
-    check("  every sentence translated", missing, [])
+    check("  every line translated", missing, [])
 
 
 def test_guess_when_nothing_is_configured():
@@ -893,42 +888,71 @@ def test_meet_appends_to_one_line():
 
 
 
-def test_revision_across_a_full_stop():
+def test_teams_is_not_split():
     """
-    Live recognition revises itself across a full stop it has already produced.
+    Teams keeps one row per caption line, and that is deliberate.
 
-    "Good morning everyone." becomes "Good morning everyone, thanks for joining."
-    a second later. Treating a finished sentence as immutable turned that into two
-    rows, the second of them the fragment ", thanks for joining." -- a regression
-    against Teams, which had worked correctly before sentences existed.
+    Teams already breaks its captions where the speaker actually paused, so
+    splitting them again second-guesses something that is already right. Sentence
+    splitting exists for Google Meet, which does not break lines at all, and it
+    must not follow Meet's needs back into Teams.
     """
-    print("Smoke: the recogniser takes back a full stop")
+    print("Smoke: Teams keeps one row per caption line")
     c = boot('detectAnswer = {lang:"en", name:"English"};')
-
-    c.eval('say("Sarah", "Good morning everyone.", "one")')
+    c.eval('say("Sarah", "Of course. We deploy the new model on Friday afternoon.", "a")')
     tick(c, 2500)
-    check("  committed as one sentence",
-          [r["text"] for r in json.loads(rows(c))], ["Good morning everyone."])
+    check("  two sentences, one row",
+          [r["text"] for r in json.loads(rows(c))],
+          ["Of course. We deploy the new model on Friday afternoon."])
+    check("  sent to the translator whole",
+          json.loads(c.eval("JSON.stringify(calls.filter(x=>x.path==='/translate')"
+                            ".map(x=>x.body.text))")),
+          ["Of course. We deploy the new model on Friday afternoon."])
 
-    c.eval('say("Sarah", "Good morning everyone, thanks for joining.", "one")')
+    print("Smoke: and a revision rewrites that row")
+    # Live recognition revises across a full stop it has already produced. Teams
+    # handled this by rewriting the row; anything that treats a finished sentence
+    # as immutable turns it into a fragment instead.
+    c.eval('say("Mohamad", "Good morning everyone.", "b")')
+    tick(c, 2500)
+    c.eval('say("Mohamad", "Good morning everyone, thanks for joining.", "b")')
     tick(c, 2500)
     got = [r["text"] for r in json.loads(rows(c))]
-    check("  rewritten in place, not appended to",
-          got, ["Good morning everyone, thanks for joining."])
+    check("  rewritten, not appended to", got[1:], ["Good morning everyone, thanks for joining."])
     check("  no fragment left behind", [t for t in got if t.startswith(",")], [])
 
-    print("Smoke: a revision that merges two sentences back into one")
-    c.eval('say("Reza", "I am done. Thanks.", "two")')
+
+def test_meet_revision_across_a_full_stop():
+    """The same revision, where splitting IS on."""
+    print("Smoke: Meet, recogniser takes back a full stop")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('location.hostname = "meet.google.com"; detectAnswer = {lang:"en", name:"English"};')
+    c.eval("buildMeetPage();")
+    c.eval(SRC); tick(c, 200)
+
+    c.eval('meetSay("Sarah", "Good morning everyone.", "one")')
     tick(c, 2500)
-    check("  two rows", len(json.loads(rows(c))), 3)
-    c.eval('say("Reza", "I am done thanking everybody.", "two")')
+    c.eval('meetSay("Sarah", "Good morning everyone, thanks for joining.", "one")')
     tick(c, 2500)
-    got = [r["text"] for r in json.loads(rows(c))]
+    got = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
+    # Positional keys: sentence 0 stays sentence 0 and its row is rewritten.
+    check("  rewritten in place", got, ["Good morning everyone, thanks for joining."])
+    check("  no fragment", [t for t in got if t.startswith(",")], [])
+
+    print("Smoke: Meet, a revision that merges two sentences into one")
+    c.eval('meetSay("Reza", "I am done. Thanks.", "two")')
+    tick(c, 2500)
+    check("  two rows", len(json.loads(c.eval("JSON.stringify(meetRows())"))), 3)
+    c.eval('meetSay("Reza", "I am done thanking everybody.", "two")')
+    tick(c, 2500)
+    got = [r["text"] for r in json.loads(c.eval("JSON.stringify(meetRows())"))]
     check("  merged back to one", got[1:], ["I am done thanking everybody."])
     check("  the orphan row is gone", [t for t in got if t == "Thanks."], [])
 
 
-test_revision_across_a_full_stop()
+test_teams_is_not_split()
+test_meet_revision_across_a_full_stop()
 test_meet_appends_to_one_line()
 test_google_meet_capture()
 test_empty_caption_window()
