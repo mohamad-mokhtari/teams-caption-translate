@@ -168,8 +168,12 @@ Spanish, three people still have "from English" configured, and the translator r
 Spanish as English and produces confident nonsense. The only way to avoid that is
 not to have the setting.
 
-Press **⚙** and choose from the dropdown. First time, it guesses from your browser's
-own language and remembers your choice after that.
+Press **⚙** and choose from the dropdown. Your choice is remembered.
+
+Before you have chosen, the order is: **what `TARGET_LANG` in `server/.env` says**, then
+your browser's own language, then whatever the service reports. The deployment setting
+comes first on purpose — guessing from the browser is right for someone with no
+configuration, and wrong against a team that deliberately set one.
 
 **Your scenario, working:** a meeting captioned in Spanish, with three people in it.
 
@@ -185,6 +189,13 @@ Nobody configured Spanish. The panel worked it out from the first few lines.
 all.** No round trip, no cost, and no second copy of every line under the first.
 This is enforced in code rather than by asking the model — told to translate
 captions into Spanish and handed Spanish, `gpt-4o-mini` returns English.
+
+When that happens the panel **says so**, in a banner you can click to change
+language. It is a correct state that looks exactly like a broken tool, so it is not
+allowed to be silent.
+
+The first line or two of a meeting are translated before detection can answer — it
+needs some text to work from. Those are hidden once pass-through turns on.
 
 **48 languages**, each with its own font stack and text direction: Arabic and Hebrew
 scripts flip the panel right-to-left; Chinese, Japanese and Korean get CJK fonts and
@@ -323,6 +334,13 @@ after the meeting, so the delay costs nothing.
 > did not.
 
 ### Tests
+
+`test_smoke.py` runs the **real `content.js`** against a fake Teams page and a fake
+service, in a small DOM built for the purpose (`tests/dom.js`). It feeds captions in
+and asserts the panel shows them.
+
+This exists because two regressions reached a live meeting. It is the only test that
+would have caught either.
 
 ```bash
 pip install quickjs                               # for the extension tests

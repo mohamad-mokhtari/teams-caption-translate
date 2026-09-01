@@ -287,6 +287,7 @@
   style.textContent += "\n\n/* --- full screen ----------------------------------------------------------\n   A third size beyond \"large\", for when following the conversation IS the task\n   and the meeting behind it is not. resize is off: there is nothing to resize\n   to, and leaving the native handle on gives a grab target that does nothing. */\n#mct-panel.full {\n  left: 0; top: 0; right: 0; bottom: 0;\n  width: auto; height: auto; max-height: none;\n  border: 0; border-radius: 0;\n  resize: none;\n}\n#mct-panel.full #mct-log { padding: 12px 18px; font-size: 15px; }\n#mct-panel.full .mct-seg { margin-bottom: 14px; max-width: 90ch; }\n\n/* Way back to the newest caption after scrolling up. Floats over the log rather\n   than sitting in the layout, so appearing does not reflow what is being read. */\n#mct-jump {\n  position: absolute;\n  left: 50%;\n  transform: translateX(-50%);\n  bottom: 44px;\n  display: none;\n  background: #232833; color: #e8e8ea;\n  border: 1px solid #3b4252; border-radius: 20px;\n  padding: .2rem .7rem;\n  font-size: 11px; font-weight: 600;\n  cursor: pointer; white-space: nowrap;\n  box-shadow: 0 3px 10px rgba(0,0,0,.4);\n}\n#mct-jump:hover { border-color: #4b5563; }\n";
   style.textContent += "\n\n/* --- settings row ---------------------------------------------------------\n   Hidden behind the gear. The language picker is a set-once control, so it does\n   not earn permanent space in a 380px header -- but the current language is\n   always visible in the status line below, so the state is never hidden even\n   when the control is. The capture tools live here too: they are meaningless to\n   anyone who is not debugging a selector, and they were crowding out the things\n   people actually press. */\n#mct-settings {\n  display: none;\n  flex: 0 0 auto;\n  flex-direction: column;\n  gap: 6px;\n  padding: 8px 10px;\n  border-bottom: 1px solid #2a2f3a;\n  background: #11131a;\n}\n#mct-settings.open { display: flex; }\n#mct-settings label { font-size: 11px; color: #9096a3; display: block; margin-bottom: 3px; }\n#mct-lang {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 13px;\n}\n#mct-detected { font-size: 11px; color: #7b8194; }\n#mct-detected b { color: #9096a3; font-weight: 600; }\n#mct-tools { display: flex; flex-wrap: wrap; gap: 4px; }\n#mct-tools button {\n  background: #232833; color: #9096a3; border: 1px solid #333a49;\n  border-radius: 6px; padding: 2px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n#mct-tools button:hover { color: #e8e8ea; }\n\n/* --- scripts --------------------------------------------------------------\n   A font stack per writing system. The Latin defaults render Chinese, Japanese,\n   Korean, Thai and the Indic scripts as tofu or as something a reader can only\n   just make out, and CJK also breaks lines by character rather than by word --\n   so word-break has to be relaxed or every line breaks in the wrong place. */\n.mct-tr.s-arab, .mct-sum-out.s-arab {\n  font-family: Tahoma, \"Segoe UI\", \"Noto Naskh Arabic\", \"Iranian Sans\", sans-serif;\n  font-size: 14px;\n}\n.mct-tr.s-hebr, .mct-sum-out.s-hebr {\n  font-family: \"Segoe UI\", Arial, \"Noto Sans Hebrew\", sans-serif; font-size: 14px;\n}\n.mct-tr.s-hans, .mct-sum-out.s-hans,\n.mct-tr.s-hant, .mct-sum-out.s-hant {\n  font-family: \"Microsoft YaHei\", \"PingFang SC\", \"Noto Sans CJK SC\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-jpan, .mct-sum-out.s-jpan {\n  font-family: \"Yu Gothic\", \"Hiragino Sans\", \"Noto Sans CJK JP\", \"Meiryo\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n.mct-tr.s-kore, .mct-sum-out.s-kore {\n  font-family: \"Malgun Gothic\", \"Apple SD Gothic Neo\", \"Noto Sans CJK KR\", sans-serif;\n  font-size: 15px; word-break: normal; overflow-wrap: anywhere; line-height: 1.7;\n}\n/* Thai and Khmer have no spaces between words, so a browser that breaks on\n   spaces will not break at all and the line runs off the side. */\n.mct-tr.s-thai, .mct-sum-out.s-thai {\n  font-family: \"Leelawadee UI\", \"Noto Sans Thai\", Tahoma, sans-serif;\n  font-size: 15px; word-break: break-all; line-height: 1.8;\n}\n.mct-tr.s-deva, .mct-sum-out.s-deva,\n.mct-tr.s-beng, .mct-sum-out.s-beng,\n.mct-tr.s-guru, .mct-sum-out.s-guru,\n.mct-tr.s-taml, .mct-sum-out.s-taml,\n.mct-tr.s-telu, .mct-sum-out.s-telu {\n  font-family: \"Nirmala UI\", \"Noto Sans\", sans-serif; font-size: 15px; line-height: 1.75;\n}\n.mct-tr.s-armn, .mct-sum-out.s-armn,\n.mct-tr.s-geor, .mct-sum-out.s-geor,\n.mct-tr.s-grek, .mct-sum-out.s-grek,\n.mct-tr.s-cyrl, .mct-sum-out.s-cyrl {\n  font-family: \"Segoe UI\", \"Noto Sans\", sans-serif;\n}\n\n/* Nothing to translate: the reader already speaks the meeting's language, so the\n   translation lane is not drawn at all rather than echoing each line back. */\n#mct-panel.passthrough .mct-tr,\n#mct-panel.passthrough .mct-lat { display: none; }\n";
   style.textContent += "\n\n/* A language change, marked in the flow of the conversation. Everything above it\n   is in the previous language and stays that way; everything below is in the new\n   one. Without the marker the panel just looks inconsistent. */\n.mct-note {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 12px 0 10px;\n  font-size: 11px;\n  color: #9096a3;\n  font-style: italic;\n}\n.mct-note::before, .mct-note::after {\n  content: \"\";\n  flex: 1;\n  height: 1px;\n  background: #2a2f3a;\n}\n.mct-note .t { font-style: normal; color: #6b7280; }\n";
+  style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.passthrough #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -322,6 +323,9 @@
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
       el("button", { id: "mct-close", text: "\u00d7", title: "close" }),
     ]),
+
+    // Why nothing is being translated. Only visible while that is the case.
+    el("div", { id: "mct-why" }),
 
     // Language, and the capture tools. Hidden until the gear is pressed.
     el("div", { id: "mct-settings" }, [
@@ -465,6 +469,7 @@
   const $settings = panel.querySelector("#mct-settings");
   const $lang     = panel.querySelector("#mct-lang");
   const $detected = panel.querySelector("#mct-detected");
+  const $why      = panel.querySelector("#mct-why");
 
   // ---------- language ------------------------------------------------------
 
@@ -545,7 +550,17 @@
   };
 
   function applyPassthrough() {
-    panel.classList.toggle("passthrough", passthrough());
+    const on = passthrough();
+    panel.classList.toggle("passthrough", on);
+    if (!on) return;
+    // Rebuilt each time so it names the languages currently in play.
+    $why.textContent = "";
+    $why.appendChild(el("span", { text: "The captions are already in " }));
+    $why.appendChild(el("b", { text: caption.name || caption.lang }));
+    $why.appendChild(el("span", {
+      text: ", which is the language you have chosen \u2014 so nothing is being "
+          + "translated. Click here to pick a different one.",
+    }));
   }
 
   function paintDetected() {
@@ -565,10 +580,18 @@
     }));
   }
 
+  function openSettings() {
+    $settings.classList.add("open");
+    paintDetected();
+  }
+
   panel.querySelector("#mct-gear").onclick = () => {
     $settings.classList.toggle("open");
     if ($settings.classList.contains("open")) paintDetected();
   };
+
+  // The banner exists to be acted on, so it is the control as well as the notice.
+  $why.onclick = openSettings;
 
   /**
    * Hiding the log and bringing it back.
@@ -829,12 +852,27 @@
         store.set("mct.languages", JSON.stringify(cfg.languages));
         buildPicker();
       }
-      // Stored choice wins; then the browser's own language; then the service's
-      // default. Only ever resolved once, never overwritten by a later poll.
+      /*
+       * Resolved once, in this order:
+       *
+       *   1. what this reader chose here before
+       *   2. what the deployment configured, if it configured anything
+       *   3. the browser's own language
+       *   4. whatever the service reports as its default
+       *
+       * Step 2 exists because step 3 was doing real harm. A deployment with
+       * TARGET_LANG=fa had every reader silently switched to their browser's
+       * English -- which then matched the English captions, so pass-through
+       * kicked in and translation stopped. Guessing is a reasonable default for
+       * someone with no configuration; it must not overrule someone who has any.
+       */
       if (!prefs.target) {
         const stored = await store.get(LANG_KEY);
+        const pinned = cfg.target_lang_pinned && langs.byCode[cfg.target_lang]
+          ? cfg.target_lang : "";
         await setTarget(
-          (stored && langs.byCode[stored]) ? stored : guessTarget(cfg.target_lang || "en"),
+          (stored && langs.byCode[stored]) ? stored
+            : (pinned || guessTarget(cfg.target_lang || "en")),
           { persist: false },
         );
       }

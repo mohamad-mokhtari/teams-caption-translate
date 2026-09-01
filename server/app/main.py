@@ -101,6 +101,15 @@ async def config():
     return {
         "target_lang": settings.target_lang,
         "target_lang_name": languages.name_of(settings.target_lang, settings.target_lang_name),
+        # Did somebody actually choose this, or is it just the value in the code?
+        #
+        # It decides whether the panel may override it with the browser's own
+        # language for a reader who has not picked one. Guessing is right for a
+        # shared service where everyone wants something different; it is wrong
+        # against a deployment whose .env says TARGET_LANG=fa, and overriding that
+        # silently replaced one team's Persian with English -- which then matched
+        # the captions, so translation stopped altogether.
+        "target_lang_pinned": "target_lang" in settings.model_fields_set,
         # Persian, Arabic and Hebrew render right-to-left. Getting this wrong makes
         # the output technically correct and practically unreadable.
         "rtl": languages.is_rtl(settings.target_lang),
