@@ -71,25 +71,56 @@
     for (const n of hit.slice(0, 5)) {
       say(`  innermost: ${desc(n)}`);
       say(`  ancestry:  ${chain(n)}`);
-      // The speaker's name is what tells us where one line begins and ends.
-      let up = n, who = null;
-      for (let i = 0; i < 6 && up; i++, up = up.parentElement) {
-        const cand = [...up.querySelectorAll("*")].find(e =>
-          e !== n && /author|speaker|name/i.test(e.className + " " +
-            [...e.attributes].map(a => a.name + a.value).join(" ")));
-        if (cand) { who = { el: cand, line: up }; break; }
+      /*
+       * Where one line begins, and where the speaker's name sits inside it.
+       *
+       * The first version of this guessed by looking for "author", "speaker" or
+       * "name" anywhere in an element's attributes -- and reported a "Jump to
+       * bottom" button, because the attribute called `jsname` contains "name".
+       * Guessing by naming was the wrong idea anyway on a platform whose class
+       * names are generated. This dumps the structure instead and lets a person
+       * read it.
+       */
+      let line = n;
+      for (let i = 0; i < 4 && line.parentElement; i++) {
+        line = line.parentElement;
+        // A line is the smallest ancestor holding more than just this text --
+        // usually the text plus whatever names the person who said it.
+        if (line.children.length > 1) break;
       }
-      say(`  speaker:   ${who ? desc(who.el) + `  "${who.el.textContent.trim().slice(0, 30)}"` : "(not found nearby)"}`);
-      say(`  one line:  ${who ? desc(who.line) : "(unknown)"}`);
+      say(`  the line:  ${desc(line)}`);
+      say(`  its full contents:`);
+      const tree = (nd, d = 1) => {
+        if (d > 5) return;
+        const own = [...nd.childNodes].filter(x => x.nodeType === 3)
+          .map(x => x.textContent.trim()).filter(Boolean).join(" ");
+        say("    " + "  ".repeat(d) + desc(nd) + (own ? `   "${own.slice(0, 60)}"` : ""));
+        for (const ch of nd.children) tree(ch, d + 1);
+      };
+      tree(line);
       say("");
     }
   }
 
-  // 3. How many separate lines are on screen, and do they share a parent?
-  if (phrase) {
-    const hits = deep("*").filter(n => (n.textContent || "").trim() &&
-      ![...n.children].length && n.textContent.trim().length > 8);
-    say(`--- leaf text nodes on the page: ${hits.length} (context only) ---`);
+  // 3. Every caption line currently on screen, side by side.
+  //
+  //    One line tells you almost nothing: what matters is whether two people's
+  //    turns are separate blocks or one, and whether the speaker's name repeats.
+  //    Say something, have somebody else say something, then run this.
+  const region = deep('[role="region"]').find(r =>
+    /caption|sous-titre|untertitel|subtitul|字幕|kapsiyon/i.test(r.getAttribute("aria-label") || ""))
+    || deep('[jsname="dsyhDe"]')[0];
+  if (region) {
+    say(`--- the caption area: ${desc(region)} ---`);
+    say(`  ${region.children.length} block(s) inside it right now:`);
+    for (const block of [...region.children].slice(0, 6)) {
+      say(`    ${desc(block)}`);
+      for (const kid of [...block.children].slice(0, 6)) {
+        say(`      ${desc(kid)}   "${(kid.textContent || "").trim().slice(0, 50)}"`);
+      }
+    }
+  } else {
+    say("--- could not find a caption region by role/aria-label ---");
   }
 
   const report = out.join("\n");

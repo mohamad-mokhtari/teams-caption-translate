@@ -276,29 +276,44 @@
     },
     {
       /*
-       * Google Meet — NOT VERIFIED against a real call.
+       * Google Meet — partly observed, on 2026-09-01. Real structure:
        *
-       * Meet's markup is obfuscated and changes, so these are structural guesses
-       * rather than anything observed. Auto-detect will probably fail, and the
-       * manual "find captions" button is the way in until tools/probe.js has been
-       * run in an actual Meet call and these replaced with what it reports.
+       *   div.iOzk7[jsname="dsyhDe"]
+       *     div[role="region"][aria-label="Captions"]
+       *       div.nMcdL.bj4p3b            one speaker's turn
+       *         div.ygicle.VbkSUe         the words
        *
-       * Deliberately not left out altogether: with the entry present the panel
-       * loads, the manual attach works, and the probe can be run from the panel
-       * itself rather than by pasting a script.
+       * Every class there is compiler-generated and will change without notice,
+       * so they are last resorts rather than the primary hooks. `jsname` is also
+       * generated but changes far less often, and role/aria-label is the only
+       * genuinely semantic thing Meet offers.
+       *
+       * aria-label is LOCALISED — "Captions" in English, "Sous-titres" in French —
+       * so it can only ever be a hint, never the sole hook. That is why jsname
+       * leads and the label follows.
+       *
+       * Still unknown: where the speaker's name lives inside a turn. Until that
+       * is answered, Meet captions are captured and translated but attributed to
+       * nobody, which costs the speaker colours, the per-speaker filter and the
+       * summaries.
        */
       name: "meet",
       hosts: /(^|\.)meet\.google\.com$/,
-      text: '[jsname] > span, [data-self-name] ~ div span',
-      author: '[class*="zs7s8d"], [data-self-name], [class*="speaker"]',
-      window: '[jsname="dsyMBc"], [aria-label*="aptions"], [role="region"][aria-label*="aption"]',
+      // The innermost element holding the words. Ordered: observed class first,
+      // then the structural fallback of "a div inside a turn".
+      text: 'div.ygicle, div.nMcdL > div:last-child',
+      // Not yet known. Left deliberately narrow rather than broad: a wrong author
+      // selector attributes everyone's speech to one person, which is worse than
+      // attributing it to nobody.
+      author: 'div.nMcdL [data-speaker-name], div.zs7s8d',
+      window: 'div[jsname="dsyhDe"], [role="region"][aria-label*="aption"], div.a4cQT',
       candidates: [
-        '[jsname="dsyMBc"]',
-        '[aria-label*="aptions"]',
+        'div[jsname="dsyhDe"]',
         '[role="region"][aria-label*="aption"]',
-        '[class*="caption"]',
+        'div.a4cQT',
+        'div.nMcdL',
       ],
-      verified: null,
+      verified: "2026-09-01, except the speaker name",
     },
   ];
 

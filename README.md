@@ -137,22 +137,34 @@ what Teams is, and they live in one table (`PLATFORMS` at the top of
 `extension/content.js`). Adding a platform is an entry there, not a second copy of
 the file.
 
-**Google Meet is wired up but unverified.** The extension loads on
-`meet.google.com` and the panel appears, but Meet's markup is obfuscated and the
-selectors are structural guesses, not anything observed. Auto-detect will most likely
-fail; **⚙ → find captions** is the way in until they are replaced.
+### Google Meet — captured, not yet attributed
 
-To replace them, one thing has to come from a real call:
+Observed in a real call on 2026-09-01:
 
-1. Join a Meet call, turn captions on, and **say a few sentences**
-2. Open DevTools on that tab, paste [`tools/probe.js`](tools/probe.js), press Enter
-3. It asks for a few words you just said, finds them in the page, and reports the
-   markup around them — copied to your clipboard
-4. Send that back
+```
+div.a4cQT.P9KVBf
+ └ div.iOzk7 [jsname="dsyhDe"]
+    └ div [role="region"][aria-label="Captions"]     the caption area
+       └ div.nMcdL.bj4p3b                            one speaker's turn
+          └ div.ygicle.VbkSUe                        the words
+```
 
-The probe reads the page and nothing else: no network, no changes to the meeting. It
-finds the captions **by their content** rather than by guessing a selector, which is
-the whole point — a guess is what we are trying to replace.
+Captions are captured and translated. **Speakers are not**: where Meet puts the
+name inside a turn is still unknown, so lines are attributed to nobody — which
+costs the speaker colours, the per-speaker filter and the summaries. Everything
+else works.
+
+Every class name there is compiler-generated and will change without notice, so
+they are last resorts. `jsname` is generated too but changes far less often, and
+`role="region"` is the only genuinely semantic hook Meet offers — its `aria-label`
+is **localised** ("Sous-titres" in French), so it can be a hint and never the sole
+selector.
+
+To close the speaker gap, run [`tools/probe.js`](tools/probe.js) in a Meet call
+**with two people talking**. It reads the page and nothing else: no network, no
+changes to the meeting. It finds the captions **by their content** rather than by
+guessing a selector — which is the point, since a guess is what it exists to
+replace.
 
 The console log names the platform and says whether anyone has checked it:
 

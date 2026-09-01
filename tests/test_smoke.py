@@ -55,6 +55,55 @@ let lines = {};
  * watching" as proof of a problem will see this and never stop reacting -- which
  * is what turned a whole meeting into its first sentence.
  */
+/*
+ * Google Meet's caption area, as observed on 2026-09-01:
+ *
+ *   div.iOzk7[jsname=dsyhDe] > div[role=region][aria-label=Captions]
+ *     > div.nMcdL.bj4p3b        one speaker's turn
+ *       > div.ygicle.VbkSUe     the words
+ */
+let meetRegion = null, meetTurns = {};
+function buildMeetPage() {
+  const outer = document.createElement("div");
+  outer.className = "a4cQT P9KVBf";
+  const mid = document.createElement("div");
+  mid.className = "iOzk7";
+  mid.setAttribute("jsname", "dsyhDe");
+  meetRegion = document.createElement("div");
+  meetRegion.className = "vNKgIf UDinHf";
+  meetRegion.setAttribute("role", "region");
+  meetRegion.setAttribute("aria-label", "Captions");
+  mid.appendChild(meetRegion);
+  outer.appendChild(mid);
+  document.body.appendChild(outer);
+  meetTurns = {};
+}
+function meetSay(speaker, text, id) {
+  if (!meetRegion) buildMeetPage();
+  id = id || ("turn" + (++lineNo));
+  let turn = meetTurns[id];
+  if (!turn) {
+    turn = document.createElement("div");
+    turn.className = "nMcdL bj4p3b";
+    const words = document.createElement("div");
+    words.className = "ygicle VbkSUe";
+    turn.appendChild(words);
+    meetRegion.appendChild(turn);
+    meetTurns[id] = turn;
+  }
+  turn.querySelector("div.ygicle").textContent = text;
+  return id;
+}
+function meetRows() {
+  const log = document.querySelector("#mct-log");
+  if (!log) return [];
+  return log.querySelectorAll(".mct-seg").map(r => ({
+    speaker: r.querySelector(".mct-spk").textContent,
+    text:    r.querySelector(".mct-txt").textContent,
+    tr:      r.querySelector(".mct-tr").textContent,
+  }));
+}
+
 /** An old, empty caption window left behind in the page. Teams does this. */
 function addEmptyCaptionWindow() {
   const orphan = document.createElement("div");
@@ -730,16 +779,56 @@ def test_platform_table():
         c.eval(f'var location = {{ hostname: "{host}" }};' + table)
         check(f"  {host}", c.eval("PLATFORM.name"), want)
 
-    print("Smoke: unverified selectors say so")
+    print("Smoke: every platform declares what it needs and whether it is checked")
     c = quickjs.Context()
     c.eval('var location = { hostname: "x" };' + table)
-    check("  teams is verified", bool(c.eval(
-        'PLATFORMS.find(p => p.name === "teams").verified')), True)
-    check("  meet is not", c.eval(
-        'PLATFORMS.find(p => p.name === "meet").verified'), None)
+    keys = json.loads(c.eval(
+        'JSON.stringify(PLATFORMS.map(p => Object.keys(p).sort()))'))
+    for k in keys:
+        check("  has every field",
+              [x for x in ("author", "candidates", "hosts", "name", "text",
+                           "verified", "window") if x not in k], [])
+    # `verified` is a note about when a human last looked, or null. It is what the
+    # console line reports, so a platform nobody has checked cannot pass silently
+    # as one that has been.
+    check("  verified is a note or null",
+          bool(c.eval('PLATFORMS.every(p => p.verified === null'
+                      ' || typeof p.verified === "string")')), True)
+
+
+def test_google_meet_capture():
+    """Meet's caption area, built from the markup a real call reported."""
+    print("Smoke: Google Meet")
+    c = quickjs.Context()
+    c.eval(DOM); c.eval(SERVICE); c.eval(PAGE)
+    c.eval('location.hostname = "meet.google.com"; detectAnswer = {lang:"en", name:"English"};')
+    c.eval("buildMeetPage();")
+    c.eval(SRC); tick(c, 200)
+
+    check("  picked the Meet selectors",
+          "platform: meet" in c.eval('logLines.map(l => l[1]).join(" ")'), True)
+
+    said = ["Hello everyone, this is the first thing said on the Meet call.",
+            "And here is a second sentence, spoken a little while later on.",
+            "A third one, to be sure it keeps working past the opening line."]
+    for t in said:
+        c.eval(f'meetSay("Sarah", "{t}")')
+        tick(c, 1500)
+
+    got = json.loads(c.eval("JSON.stringify(meetRows())"))
+    check("  every line captured", len(got), len(said))
+    check("  the last one too", got[-1]["text"] if got else "", said[-1])
+    check("  all translated", [r["text"] for r in got if not r["tr"]], [])
+    check("  never let go of the container",
+          "re-attaching" in c.eval('logLines.map(l => l[1]).join(" | ")'), False)
+
+    # Known gap, asserted so it cannot be forgotten: where Meet puts the speaker's
+    # name is still unknown, so lines are captured but attributed to nobody.
+    check("  speaker not yet attributed", {r["speaker"] for r in got}, {""})
 
 
 test_platform_table()
+test_google_meet_capture()
 test_empty_caption_window()
 test_stalled_capture_is_visible()
 test_decoy_caption_text()
