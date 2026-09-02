@@ -469,6 +469,7 @@
   style.textContent += "\n\n/* A language change, marked in the flow of the conversation. Everything above it\n   is in the previous language and stays that way; everything below is in the new\n   one. Without the marker the panel just looks inconsistent. */\n.mct-note {\n  display: flex;\n  align-items: center;\n  gap: 8px;\n  margin: 12px 0 10px;\n  font-size: 11px;\n  color: #9096a3;\n  font-style: italic;\n}\n.mct-note::before, .mct-note::after {\n  content: \"\";\n  flex: 1;\n  height: 1px;\n  background: #2a2f3a;\n}\n.mct-note .t { font-style: normal; color: #6b7280; }\n";
   style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.why #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
   style.textContent += "\n\n/* A filter is hiding people.\n   It used to announce itself in the status line, which the next caption\n   overwrote a second later -- so a filter left on by a stray click was\n   invisible, and looked like the tool had stopped showing one person. Anything\n   that hides content has to keep saying so for as long as it is hiding it. */\n#mct-filtered {\n  display: none;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  font-size: 11px;\n  color: #c7d2fe;\n  background: rgba(99, 102, 241, .14);\n  border-bottom: 1px solid #2a2f3a;\n}\n#mct-filtered.on { display: flex; }\n#mct-filtered .sp { flex: 1; }\n#mct-filtered button {\n  background: #232833; color: #e8e8ea; border: 1px solid #3b4252;\n  border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n";
+  style.textContent += "\n\n/* Read aloud. Off unless asked for -- a panel that starts talking in a meeting is\n   worse than one that stays quiet. */\n#mct-speak.on { color: #34d399; border-color: #34d399; }\n#mct-voice {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 12px;\n}\n#mct-rate { width: 100%; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -499,6 +500,7 @@
       el("span", { cls: "sp" }),
       el("button", { id: "mct-copy",  text: "copy" }),
       el("button", { id: "mct-save",  text: "save", title: "write the transcript now" }),
+      el("button", { id: "mct-speak", text: "\u25B6", title: "read the translation aloud" }),
       el("button", { id: "mct-gear",  text: "\u2699", title: "language and tools" }),
       el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
@@ -521,6 +523,10 @@
         el("select", { id: "mct-lang" }),
       ]),
       el("div", { id: "mct-detected" }),
+      el("div", { id: "mct-speak-box" }, [
+        el("label", { text: "Read aloud \u2014 voice" }),
+        el("select", { id: "mct-voice" }),
+      ]),
       el("div", { id: "mct-tools" }, [
         el("button", { id: "mct-diag",  text: "find captions" }),
         el("button", { id: "mct-pick",  text: "pick manually" }),
@@ -658,6 +664,8 @@
   const $lang     = panel.querySelector("#mct-lang");
   const $detected = panel.querySelector("#mct-detected");
   const $why         = panel.querySelector("#mct-why");
+  const $speak       = panel.querySelector("#mct-speak");
+  const $voice       = panel.querySelector("#mct-voice");
   const $filtered    = panel.querySelector("#mct-filtered");
   const $filteredTxt = panel.querySelector("#mct-filtered-txt");
   panel.querySelector("#mct-filtered-clear").onclick = () => setFilter("");
@@ -729,6 +737,7 @@
     applyPassthrough();
     paintDetected();
     paintStatus();
+    buildVoices();          // a different language needs a different voice
   }
 
   $lang.onchange = () => setTarget($lang.value);
@@ -811,6 +820,13 @@
     $settings.classList.add("open");
     paintDetected();
   }
+
+  $speak.onclick = () => setSpeaking(!speech.on);
+
+  $voice.onchange = () => {
+    speech.voice = $voice.value;
+    store.set(VOICE_KEY, speech.voice);
+  };
 
   panel.querySelector("#mct-gear").onclick = () => {
     $settings.classList.toggle("open");
@@ -1046,6 +1062,13 @@
     if (!error && text) {
       const rec = transcript.findLast?.(r => r.key === key && !r.saved);
       if (rec) rec.translation = text;
+
+      // Once per row. A row can be retranslated when the recogniser revises it,
+      // and hearing the same sentence twice is worse than missing the correction.
+      if (!speech.spoken.has(key)) {
+        speech.spoken.add(key);
+        speak(text);
+      }
     }
     const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (!row) return;
@@ -1314,6 +1337,103 @@
       server.inflight--;
       paintStatus();
     }
+  }
+
+  // ---------- reading it aloud ---------------------------------------------
+
+  /**
+   * Speak each translated row through the browser's own voice.
+   *
+   * No service, no key, no install: speechSynthesis ships with Chrome and Edge and
+   * runs on the machine. It is what makes "I speak Persian, you hear English"
+   * work without anyone injecting audio into the call -- the words travel as
+   * captions, and the listener's own browser says them.
+   *
+   * Off by default. A panel that starts talking in a meeting unasked is worse than
+   * one that stays quiet.
+   */
+  const speech = { on: false, voice: "", rate: 1.05, spoken: new Set(), queued: 0 };
+  const SPEAK_KEY = "mct.speak";
+  const VOICE_KEY = "mct.voice";
+
+  /** How far behind the meeting the voice may fall before it gives up catching up. */
+  const SPEAK_MAX_QUEUE = 3;
+
+  // Declared, not assigned to a const: the voiceschanged registration below calls
+  // this while the module is still being evaluated.
+  function synth() { return globalThis.speechSynthesis || null; }
+
+  function voicesFor(code) {
+    const all = synth() ? synth().getVoices() : [];
+    const base = (code || "").split("-")[0].toLowerCase();
+    return all.filter(v => (v.lang || "").toLowerCase().replace("_", "-").startsWith(base));
+  }
+
+  function buildVoices() {
+    const list = voicesFor(prefs.target);
+    $voice.textContent = "";
+    if (!synth()) {
+      $voice.appendChild(el("option", { value: "", text: "not supported in this browser" }));
+      return;
+    }
+    if (!list.length) {
+      // Linux especially ships with few or no voices; saying so beats a silent
+      // toggle that appears to do nothing.
+      $voice.appendChild(el("option", {
+        value: "", text: `no ${targetName()} voice installed on this machine` }));
+      return;
+    }
+    for (const v of list) $voice.appendChild(el("option", { value: v.name, text: v.name }));
+    if (speech.voice && list.some(v => v.name === speech.voice)) $voice.value = speech.voice;
+    else speech.voice = $voice.value;
+  }
+
+  function speak(text) {
+    if (!speech.on || !text || !synth()) return;
+    const list = voicesFor(prefs.target);
+    if (!list.length) return;
+
+    /*
+     * Staying current beats saying everything.
+     *
+     * Speech takes as long as the sentence does, so a queue can only ever fall
+     * further behind a conversation that keeps going. Past a few rows the right
+     * thing is to drop what is stale and follow the meeting, not to recite a
+     * backlog nobody can still place.
+     */
+    if (speech.queued >= SPEAK_MAX_QUEUE) {
+      synth().cancel();
+      speech.queued = 0;
+    }
+
+    const u = new SpeechSynthesisUtterance(text);
+    const chosen = list.find(v => v.name === speech.voice) || list[0];
+    u.voice = chosen;
+    u.lang = chosen.lang;
+    u.rate = speech.rate;
+    speech.queued++;
+    const done = () => { speech.queued = Math.max(0, speech.queued - 1); };
+    u.onend = done;
+    u.onerror = done;
+    synth().speak(u);
+  }
+
+  // Voices load asynchronously, and on a first visit getVoices() is empty until
+  // this fires -- which is why the picker is rebuilt rather than filled once.
+  if (synth() && synth().addEventListener) {
+    synth().addEventListener("voiceschanged", () => buildVoices());
+  }
+
+  function setSpeaking(on, { persist = true } = {}) {
+    speech.on = on;
+    $speak.classList.toggle("on", on);
+    $speak.title = on ? "stop reading aloud" : "read the translation aloud";
+    // Only when there is something to stop. Cancelling on startup, before anything
+    // has been said, is a no-op in a browser but still a call into the speech
+    // engine for no reason.
+    if (!on && speech.queued && synth()) { synth().cancel(); speech.queued = 0; }
+    if (persist) store.set(SPEAK_KEY, on ? "1" : "");
+    if (on) buildVoices();
   }
 
   // ---------- saving the transcript ----------------------------------------
@@ -2257,6 +2377,9 @@
 
     const stored = await store.get(LANG_KEY);
     if (stored && langs.byCode[stored]) await setTarget(stored, { persist: false });
+
+    speech.voice = (await store.get(VOICE_KEY)) || "";
+    setSpeaking(!!(await store.get(SPEAK_KEY)), { persist: false });
 
     loadConfig();
   })();

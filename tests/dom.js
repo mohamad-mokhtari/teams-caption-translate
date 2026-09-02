@@ -256,6 +256,30 @@ const window = { top: null };
 window.top = window;
 const globalThis_chrome = undefined;   // no extension APIs: exercise the fallback
 
+/* Enough of the Web Speech API to test against. Real voices differ by machine --
+   Windows and macOS ship several, Linux often none -- so the tests set their own. */
+const spoken = [];
+let voices = [
+  { name: "Microsoft David", lang: "en-US" },
+  { name: "Microsoft Zira",  lang: "en-US" },
+  { name: "Google Farsi",    lang: "fa-IR" },
+];
+class SpeechSynthesisUtterance {
+  constructor(text) { this.text = text; this.voice = null; this.lang = ""; this.rate = 1; }
+}
+// On globalThis, not a lexical const: a browser exposes it as a property of the
+// global object and the code under test reads it that way. Declaring it with
+// const here made every voice lookup come back empty, which looked exactly like
+// a machine with no voices installed.
+globalThis.speechSynthesis = {
+  _listeners: {},
+  getVoices: () => voices,
+  speak(u) { spoken.push({ text: u.text, voice: u.voice && u.voice.name, rate: u.rate }); },
+  cancel() { spoken.push({ cancelled: true }); },
+  addEventListener(t, fn) { (this._listeners[t] ||= []).push(fn); },
+};
+globalThis.SpeechSynthesisUtterance = SpeechSynthesisUtterance;
+
 const logLines = [];
 const console = {
   log:  (...a) => logLines.push(["log", a.map(String).join(" ")]),

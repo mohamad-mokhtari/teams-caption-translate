@@ -463,6 +463,35 @@ already completed, the whole line is retranslated and the wording can shift. Ful
 removing that means treating each sentence as its own row rather than each Teams
 caption line — a bigger change, worth doing only if you still notice it.
 
+### Hearing it instead of reading it
+
+**▶** in the header reads each translated row aloud, in your language, using the
+browser's own voice. No service, no key, nothing installed — `speechSynthesis` ships
+with Chrome and Edge and runs on your machine.
+
+This is what makes *"I speak Persian, you hear English"* work **without injecting
+audio into the call**. The words travel as captions; the listener's own browser says
+them. Nobody needs a virtual microphone or a driver.
+
+Off by default — a panel that starts talking in a meeting unasked is worse than one
+that stays quiet. Pick a voice under **⚙**.
+
+Three things worth knowing before relying on it:
+
+- **Voices are the machine's, not ours.** Windows and macOS ship several per
+  language; Linux often ships none. If there is no voice for your language the
+  picker says so rather than the button silently doing nothing.
+- **It falls behind, and then gives up catching up.** Speech takes as long as the
+  sentence does, so a queue can only fall further behind a conversation that keeps
+  going. Past a few rows it drops the backlog and follows the meeting — staying
+  current beats reciting something nobody can still place.
+- **Use headphones.** Your speakers playing the translation while your microphone is
+  open puts it back into the meeting.
+
+A row is spoken **once**. If the recogniser revises it afterwards, the correction is
+shown but not read out again — hearing the same sentence twice is worse than missing
+a small correction.
+
 ### Saving the meeting to a file
 
 Every conversation is appended to a Markdown file so a meeting can be re-read later.

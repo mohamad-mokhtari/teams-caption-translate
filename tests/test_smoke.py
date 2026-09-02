@@ -1080,6 +1080,59 @@ test_empty_caption_window()
 test_stalled_capture_is_visible()
 test_decoy_caption_text()
 test_no_caption_window()
+
+def test_read_aloud():
+    """
+    Speak Persian, and the English listener hears English.
+
+    The browser's own speechSynthesis does the speaking -- no service, no key,
+    nothing installed. The words travel as captions and the listener's machine
+    says them, so nothing has to be injected into the call.
+    """
+    print("Smoke: silent unless asked")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "Good morning everyone, thanks for joining us today.")')
+    tick(c, 2000)
+    check("  nothing spoken by default", json.loads(c.eval("JSON.stringify(spoken)")), [])
+
+    print("Smoke: switched on, each row is spoken once")
+    c.eval('click("#mct-speak")')
+    for t in ["Today we are reviewing the feature extraction pipeline together.",
+              "Does anybody have a question before we start properly?"]:
+        c.eval(f'say("Sarah", "{t}")')
+        tick(c, 2000)
+    said = [x for x in json.loads(c.eval("JSON.stringify(spoken)")) if "text" in x]
+    check("  spoke both", [x["text"] for x in said],
+          ["TR:Today we are reviewing the feature extraction pipeline together.",
+           "TR:Does anybody have a question before we start properly?"])
+    check("  in the reader's language", {x["voice"] for x in said}, {"Google Farsi"})
+
+    print("Smoke: a revised row is not read out twice")
+    # Hearing the same sentence again is worse than missing the correction.
+    before = len([x for x in json.loads(c.eval("JSON.stringify(spoken)")) if "text" in x])
+    c.eval('say("Sarah", "Does anybody have a question before we begin properly?", "line3")')
+    tick(c, 2000)
+    after = [x for x in json.loads(c.eval("JSON.stringify(spoken)")) if "text" in x]
+    check("  not repeated", len(after) - before, 0)
+
+    print("Smoke: it drops the backlog rather than falling behind")
+    # Speech takes as long as the sentence does, so a queue can only fall further
+    # behind a conversation that keeps going.
+    c.eval("spoken.length = 0")
+    for i in range(6):
+        c.eval(f'say("Reza", "A sentence spoken quickly, number {i}, with no pause after it.")')
+        tick(c, 2000)
+    log = json.loads(c.eval("JSON.stringify(spoken)"))
+    check("  cancelled a stale backlog", any(x.get("cancelled") for x in log), True)
+
+    print("Smoke: says so when the machine has no voice for that language")
+    c.eval('voices = [{ name: "Microsoft David", lang: "en-US" }];')
+    c.eval('click("#mct-speak"); click("#mct-speak")')   # off then on, rebuilding it
+    opts = c.eval('document.querySelector("#mct-voice").textContent')
+    check("  the picker explains itself", "no Persian (Farsi) voice installed" in opts, True)
+
+
+test_read_aloud()
 test_service_down()
 test_collapse_and_tabs()
 test_captions_move()
