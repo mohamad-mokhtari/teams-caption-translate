@@ -1132,6 +1132,51 @@ def test_read_aloud():
     check("  the picker explains itself", "no Persian (Farsi) voice installed" in opts, True)
 
 
+
+def test_speaks_from_outside_the_tab():
+    """
+    Chrome mutes audio per tab, and the meeting and the voice were in the same
+    one -- so muting the meeting to silence the original speaker silenced the
+    translation with it. The speaking moved to a hidden page the extension owns,
+    which the tab's mute does not reach.
+    """
+    print("Smoke: speech is handed to the extension, not spoken in the tab")
+    c = boot('globalThis.sentMessages = [];globalThis.chrome = { runtime: { id: "test", sendMessage: (m) => { sentMessages.push(m); return { catch() {} }; } } };detectAnswer = {lang:"en", name:"English"};')
+    c.eval('click("#mct-speak")')
+    c.eval('say("Sarah", "Good morning everyone, thanks for joining us here today.")')
+    tick(c, 2500)
+
+    sent = [m for m in json.loads(c.eval("JSON.stringify(sentMessages)"))
+            if m.get("type") == "speak"]
+    check("  handed over once", len(sent), 1)
+    check("  with the text", sent[0]["text"] if sent else "",
+          "TR:Good morning everyone, thanks for joining us here today.")
+    check("  addressed to the worker", sent[0]["target"] if sent else "", "background")
+    check("  carries the chosen voice", bool(sent and sent[0]["voice"]), True)
+    # Speaking in the tab as well would be heard twice, and would be silenced by
+    # the very mute this exists to survive.
+    check("  and NOT spoken in the tab",
+          [x for x in json.loads(c.eval("JSON.stringify(spoken)")) if "text" in x], [])
+
+    print("Smoke: switching off stops it and closes the hidden page")
+    c.eval("sentMessages.length = 0")
+    c.eval('click("#mct-speak")')
+    kinds = [m["type"] for m in json.loads(c.eval("JSON.stringify(sentMessages)"))]
+    check("  stop then close", kinds, ["stop", "close"])
+
+    print("Smoke: with no extension around it, it speaks here instead")
+    # The console build has no chrome.runtime. Falling silent there would be worse
+    # than speaking in the tab.
+    c2 = boot('detectAnswer = {lang:"en", name:"English"};')
+    c2.eval('click("#mct-speak")')
+    c2.eval('say("Sarah", "A sentence spoken with no extension in the picture.")')
+    tick(c2, 2500)
+    check("  spoken locally",
+          [x["text"] for x in json.loads(c2.eval("JSON.stringify(spoken)")) if "text" in x],
+          ["TR:A sentence spoken with no extension in the picture."])
+
+
+test_speaks_from_outside_the_tab()
 test_read_aloud()
 test_service_down()
 test_collapse_and_tabs()

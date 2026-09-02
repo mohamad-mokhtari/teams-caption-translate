@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "Meeting Caption Translator",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Reads live meeting captions and translates them via a local service. Microsoft Teams; Google Meet is present but its selectors are unverified.",
   "permissions": [
-    "storage"
+    "storage",
+    "offscreen"
   ],
   "host_permissions": [
     "https://teams.cloud.microsoft/*",
@@ -33,5 +34,8 @@
       "all_frames": true,
       "match_about_blank": true
     }
-  ]
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
 }

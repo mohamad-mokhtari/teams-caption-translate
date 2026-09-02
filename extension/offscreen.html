@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>caption speech</title>
+<!--
+  A hidden page whose only job is to talk.
+
+  It exists because Chrome mutes audio per tab, and the meeting and the voice were
+  in the same one: muting the meeting to silence the original speaker silenced the
+  translation with it. Speaking from here, which is not the meeting tab, means the
+  tab can be muted and the translation still heard.
+
+  Never visible. No tab, no window -- see extension/background.js.
+-->
+<script src="offscreen.js"></script>

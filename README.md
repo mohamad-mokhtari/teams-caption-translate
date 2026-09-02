@@ -492,6 +492,34 @@ A row is spoken **once**. If the recogniser revises it afterwards, the correctio
 shown but not read out again — hearing the same sentence twice is worse than missing
 a small correction.
 
+#### Hearing only the translation
+
+By default you hear both: the person's real voice *and* the translation over it. To
+hear only the translation:
+
+> **Right-click the meeting tab → Mute site.**
+
+That works because the speaking does **not** happen in the meeting tab. Chrome mutes
+audio per tab, so the voice is produced from a hidden page the extension owns
+(`offscreen.html`) — muting the meeting silences everyone in it and leaves the
+translation audible.
+
+Two consequences worth knowing:
+
+- **It silences the whole meeting, not one person.** Neither Meet nor Teams has
+  per-participant volume, so nothing can be selective about this. Anyone else
+  speaking reaches you as translated speech a few seconds late. Fine when one person
+  is presenting; worse in a back-and-forth.
+- **You do the muting.** Doing it automatically needs permission to see every tab you
+  have open — a lot to ask of a colleague to save one right-click.
+
+Why not just turn the meeting's volume down instead: Meet plays entirely through the
+Web Audio API and has **no media elements at all** in the page, so there is nothing
+for an extension to turn down. Tab muting is the only lever that exists.
+
+The console build has no extension around it and speaks in the page instead. Muting
+the tab there silences both — that build is for debugging capture, not for meetings.
+
 ### Saving the meeting to a file
 
 Every conversation is appended to a Markdown file so a meeting can be re-read later.

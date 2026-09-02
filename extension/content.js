@@ -470,6 +470,7 @@
   style.textContent += "\n\n/* Why there are no translations.\n   Pass-through is a correct state, and it was also completely silent: the lane\n   simply stopped appearing. Someone whose language had been switched out from\n   under them saw a tool that had broken, with a one-line status they had no\n   reason to read. It says so plainly now, and points at the way to change it. */\n#mct-why {\n  display: none;\n  flex: 0 0 auto;\n  padding: 7px 10px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n  background: rgba(251, 191, 36, .08);\n  border-bottom: 1px solid #2a2f3a;\n  cursor: pointer;\n}\n#mct-panel.why #mct-why { display: block; }\n#mct-why b { color: #fde68a; }\n";
   style.textContent += "\n\n/* A filter is hiding people.\n   It used to announce itself in the status line, which the next caption\n   overwrote a second later -- so a filter left on by a stray click was\n   invisible, and looked like the tool had stopped showing one person. Anything\n   that hides content has to keep saying so for as long as it is hiding it. */\n#mct-filtered {\n  display: none;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  font-size: 11px;\n  color: #c7d2fe;\n  background: rgba(99, 102, 241, .14);\n  border-bottom: 1px solid #2a2f3a;\n}\n#mct-filtered.on { display: flex; }\n#mct-filtered .sp { flex: 1; }\n#mct-filtered button {\n  background: #232833; color: #e8e8ea; border: 1px solid #3b4252;\n  border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n";
   style.textContent += "\n\n/* Read aloud. Off unless asked for -- a panel that starts talking in a meeting is\n   worse than one that stays quiet. */\n#mct-speak.on { color: #34d399; border-color: #34d399; }\n#mct-voice {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 12px;\n}\n#mct-rate { width: 100%; }\n";
+  style.textContent += "\n\n#mct-speak-box .hint {\n  margin-top: 5px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n}\n#mct-speak-box .hint:empty { display: none; }\n";
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -526,6 +527,7 @@
       el("div", { id: "mct-speak-box" }, [
         el("label", { text: "Read aloud \u2014 voice" }),
         el("select", { id: "mct-voice" }),
+        el("div", { id: "mct-speak-hint", cls: "hint" }),
       ]),
       el("div", { id: "mct-tools" }, [
         el("button", { id: "mct-diag",  text: "find captions" }),
@@ -666,6 +668,7 @@
   const $why         = panel.querySelector("#mct-why");
   const $speak       = panel.querySelector("#mct-speak");
   const $voice       = panel.querySelector("#mct-voice");
+  const $speakHint   = panel.querySelector("#mct-speak-hint");
   const $filtered    = panel.querySelector("#mct-filtered");
   const $filteredTxt = panel.querySelector("#mct-filtered-txt");
   panel.querySelector("#mct-filtered-clear").onclick = () => setFilter("");
@@ -1388,10 +1391,42 @@
     else speech.voice = $voice.value;
   }
 
+  /**
+   * Hand a line to the hidden page that does the speaking.
+   *
+   * Chrome mutes audio per tab, and the meeting and the voice were in the same
+   * one — so muting the meeting to silence the original speaker silenced the
+   * translation with it. Speaking from a page that is not the meeting tab means
+   * the tab can be muted and this still heard.
+   *
+   * Returns false where there is no extension around it (the console build), so
+   * the caller can fall back to speaking here.
+   */
+  function speakElsewhere(msg) {
+    try {
+      const rt = globalThis.chrome?.runtime;
+      if (!rt || !rt.sendMessage || !rt.id) return false;
+      const sent = rt.sendMessage({ target: "background", ...msg });
+      // Chrome returns a promise; an unhandled rejection here would be noise in
+      // the page's console, and the fallback has already been decided against.
+      if (sent && sent.catch) sent.catch(() => {});
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function speak(text) {
-    if (!speech.on || !text || !synth()) return;
+    if (!speech.on || !text) return;
     const list = voicesFor(prefs.target);
     if (!list.length) return;
+    const chosenName = (list.find(v => v.name === speech.voice) || list[0]).name;
+
+    if (speakElsewhere({ type: "speak", text, voice: chosenName, rate: speech.rate })) return;
+
+    // No extension around us: speak here, and accept that muting the tab to
+    // silence the meeting will silence this too.
+    if (!synth()) return;
 
     /*
      * Staying current beats saying everything.
@@ -1407,7 +1442,7 @@
     }
 
     const u = new SpeechSynthesisUtterance(text);
-    const chosen = list.find(v => v.name === speech.voice) || list[0];
+    const chosen = list.find(v => v.name === chosenName) || list[0];
     u.voice = chosen;
     u.lang = chosen.lang;
     u.rate = speech.rate;
@@ -1424,16 +1459,38 @@
     synth().addEventListener("voiceschanged", () => buildVoices());
   }
 
+  /**
+   * The one thing the reader has to do by hand.
+   *
+   * Muting the tab is what silences the original speaker; the voice comes from
+   * elsewhere and survives it. Doing the muting automatically would need
+   * permission to see every tab the person has open, which is a lot to ask of a
+   * colleague in exchange for saving a right-click.
+   */
+  function paintSpeakHint() {
+    $speakHint.textContent = speech.on
+      ? "To hear only this voice: right-click the meeting tab \u2192 Mute site. "
+        + "That silences everyone in the meeting, not only one person."
+      : "";
+  }
+
   function setSpeaking(on, { persist = true } = {}) {
     speech.on = on;
     $speak.classList.toggle("on", on);
     $speak.title = on ? "stop reading aloud" : "read the translation aloud";
-    // Only when there is something to stop. Cancelling on startup, before anything
-    // has been said, is a no-op in a browser but still a call into the speech
-    // engine for no reason.
-    if (!on && speech.queued && synth()) { synth().cancel(); speech.queued = 0; }
+    if (!on) {
+      // Stop wherever it is being said, and close the hidden page rather than
+      // leaving it open for the rest of the session doing nothing.
+      speakElsewhere({ type: "stop" });
+      speakElsewhere({ type: "close" });
+      // Only when there is something to stop here. Cancelling on startup, before
+      // anything has been said, is a no-op in a browser but still a call into the
+      // speech engine for no reason.
+      if (speech.queued && synth()) { synth().cancel(); speech.queued = 0; }
+    }
     if (persist) store.set(SPEAK_KEY, on ? "1" : "");
     if (on) buildVoices();
+    paintSpeakHint();
   }
 
   // ---------- saving the transcript ----------------------------------------
