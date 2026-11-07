@@ -24,7 +24,7 @@ from . import languages
 from .config import settings
 from .providers import ProviderError
 from .transcript import TranscriptError, append as append_transcript, directory as transcript_dir
-from .translate import detect_language, stats, summarize_speaker, translate
+from .translate import count, detect_language, stats, summarize_speaker, translate
 
 app = FastAPI(title="Caption Translator", version="1.0.0")
 
@@ -134,8 +134,16 @@ async def get_stats():
 
 
 @app.post("/translate", response_model=TranslateOut)
-async def do_translate(req: TranslateIn):
+def do_translate(req: TranslateIn):
     """
+    Deliberately `def`, not `async def` -- as are /detect and /summarize.
+
+    The provider call is a blocking HTTP request. Inside an `async def` it ran on
+    the event loop and held it for the whole call, so the service answered ONE
+    request at a time: four lines in flight took four times as long, and a
+    summary (several seconds) froze every live translation behind it. As a plain
+    `def`, FastAPI runs each request in its threadpool and they overlap.
+
     Errors are returned as a 200 with an `error` field rather than an HTTP error.
 
     A failed translation must not break the caption stream — the reader still wants
@@ -147,7 +155,7 @@ async def do_translate(req: TranslateIn):
         out = translate(req.text, req.context, req.provider, req.target, req.source)
         return TranslateOut(**out, key=req.key)
     except ProviderError as e:
-        stats["errors"] += 1
+        count("errors")
         return TranslateOut(
             translation="", cached=False,
             ms=round((time.perf_counter() - t0) * 1000, 1),
@@ -173,7 +181,7 @@ class SummaryOut(BaseModel):
 
 
 @app.post("/summarize", response_model=SummaryOut)
-async def do_summarize(req: SummaryIn):
+def do_summarize(req: SummaryIn):
     """
     Summarise one speaker's contributions.
 
@@ -184,7 +192,7 @@ async def do_summarize(req: SummaryIn):
         return SummaryOut(**summarize_speaker(req.speaker, req.segments,
                                               req.provider, req.target))
     except ProviderError as e:
-        stats["errors"] += 1
+        count("errors")
         return SummaryOut(summary="", segments=len(req.segments), ms=0.0,
                           provider=req.provider or settings.provider, error=str(e))
 
@@ -204,7 +212,7 @@ class DetectOut(BaseModel):
 
 
 @app.post("/detect", response_model=DetectOut)
-async def do_detect(req: DetectIn):
+def do_detect(req: DetectIn):
     """
     Which language is this meeting being captioned in?
 
@@ -216,7 +224,7 @@ async def do_detect(req: DetectIn):
     try:
         return DetectOut(**detect_language(req.samples, req.provider))
     except ProviderError as e:
-        stats["errors"] += 1
+        count("errors")
         return DetectOut(error=str(e))
 
 

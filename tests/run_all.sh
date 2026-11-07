@@ -11,7 +11,7 @@ fail=0
 $PY tests/syntax_check.py extension/content.js || fail=1
 $PY tests/syntax_check.py console-test.js      || fail=1
 
-for t in test_smoke test_panel test_language test_transcript; do
+for t in test_smoke test_panel test_language test_transcript test_server; do
   out=$($PY "tests/$t.py" 2>&1) || fail=1
   printf "%-18s %3d pass" "$t" "$(grep -c PASS <<<"$out")"
   n=$(grep -c FAIL <<<"$out" || true)

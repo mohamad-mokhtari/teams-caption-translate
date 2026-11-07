@@ -1,4 +1,5 @@
 """Settings for the translation companion. Loaded from .env."""
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +24,10 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"        # verify against the current model list
+    # gpt-5 and later only: how long the model thinks before answering. "none"
+    # answers straight away (about 1 s per caption); anything higher adds
+    # seconds per line. Older models that do not know "none" get it dropped.
+    openai_reasoning_effort: str = "none"
 
     # Local option. Nothing leaves the laptop.
     ollama_url: str = "http://127.0.0.1:11434"
@@ -40,9 +45,17 @@ class Settings(BaseSettings):
     # deployment-specific, and they do not belong in a shared config default.
     glossary: str = "API,SDK,merge request,pull request,pipeline,repository,deploy"
 
+    # Same input, same wording. Applied to every provider. Leave it empty
+    # (TEMPERATURE=) to send none at all -- a model that rejects it is also
+    # detected and retried without it automatically.
+    temperature: float | None = 0.2
+
     # --- limits ---
     max_chars: int = 1200        # one caption line is short; anything longer is suspect
     timeout_seconds: float = 20.0
+    # Extra attempts after a rate limit, a 5xx, or a connection that never opened.
+    # One is enough: a caption retried twice is no longer live.
+    retries: int = 1
     cache_size: int = 2000
 
     # --- transcripts ---
@@ -54,6 +67,14 @@ class Settings(BaseSettings):
     # these files, and "next to the checkout" is not somewhere anyone looks.
     transcript_enabled: bool = True
     transcript_dir: str = "~/teams-captions"
+
+    @field_validator("temperature", mode="before")
+    @classmethod
+    def _blank_is_none(cls, v):
+        """`TEMPERATURE=` (or `none`) in .env means: do not send one."""
+        if isinstance(v, str) and v.strip().lower() in ("", "none", "null"):
+            return None
+        return v
 
     # --- server ---
     host: str = "127.0.0.1"

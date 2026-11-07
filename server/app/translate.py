@@ -15,6 +15,7 @@ Two things do most of the work here, and neither is the model:
 """
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 
 from . import languages
@@ -79,23 +80,39 @@ class _Cache(OrderedDict):
     Meetings repeat themselves — greetings, names, "can you hear me", and every
     revision of a line that only gained a full stop. Caching those is free latency
     and free money.
+
+    Locked: requests run in parallel threads, and "is it there? then move it" is
+    two steps another thread's eviction can fall between.
     """
 
+    def __init__(self):
+        super().__init__()
+        self._lock = threading.Lock()
+
     def get_or_none(self, key):
-        if key in self:
-            self.move_to_end(key)
-            return self[key]
-        return None
+        with self._lock:
+            if key in self:
+                self.move_to_end(key)
+                return self[key]
+            return None
 
     def put(self, key, value):
-        self[key] = value
-        self.move_to_end(key)
-        while len(self) > settings.cache_size:
-            self.popitem(last=False)
+        with self._lock:
+            self[key] = value
+            self.move_to_end(key)
+            while len(self) > settings.cache_size:
+                self.popitem(last=False)
 
 
 _cache = _Cache()
 stats = {"calls": 0, "cache_hits": 0, "errors": 0, "total_ms": 0.0}
+_stats_lock = threading.Lock()
+
+
+def count(name: str, amount: float = 1) -> None:
+    """Thread-safe `stats[name] += amount`; requests run in parallel threads."""
+    with _stats_lock:
+        stats[name] += amount
 
 
 def translate(text: str, context: list[str] | None = None,
@@ -134,15 +151,15 @@ def translate(text: str, context: list[str] | None = None,
     key = (text, target_code, provider or settings.provider)
     hit = _cache.get_or_none(key)
     if hit is not None:
-        stats["cache_hits"] += 1
+        count("cache_hits")
         return {"translation": hit, "cached": True, "ms": 0.0,
                 "provider": provider or settings.provider, "passthrough": False}
 
     system, user = build_messages(text, context or [], target_name, source_name)
     out, ms, used = call(system, user, provider)
 
-    stats["calls"] += 1
-    stats["total_ms"] += ms
+    count("calls")
+    count("total_ms", ms)
     _cache.put(key, out)
     return {"translation": out, "cached": False, "ms": round(ms, 1),
             "provider": used, "passthrough": False}
