@@ -471,6 +471,62 @@
   style.textContent += "\n\n/* A filter is hiding people.\n   It used to announce itself in the status line, which the next caption\n   overwrote a second later -- so a filter left on by a stray click was\n   invisible, and looked like the tool had stopped showing one person. Anything\n   that hides content has to keep saying so for as long as it is hiding it. */\n#mct-filtered {\n  display: none;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  font-size: 11px;\n  color: #c7d2fe;\n  background: rgba(99, 102, 241, .14);\n  border-bottom: 1px solid #2a2f3a;\n}\n#mct-filtered.on { display: flex; }\n#mct-filtered .sp { flex: 1; }\n#mct-filtered button {\n  background: #232833; color: #e8e8ea; border: 1px solid #3b4252;\n  border-radius: 6px; padding: 1px 8px; font: inherit; font-size: 11px; cursor: pointer;\n}\n";
   style.textContent += "\n\n/* Read aloud. Off unless asked for -- a panel that starts talking in a meeting is\n   worse than one that stays quiet. */\n#mct-speak.on { color: #34d399; border-color: #34d399; }\n#mct-voice {\n  width: 100%;\n  background: #14161c; color: #e8e8ea;\n  border: 1px solid #333a49; border-radius: 6px;\n  padding: .3rem; font: inherit; font-size: 12px;\n}\n#mct-rate { width: 100%; }\n";
   style.textContent += "\n\n#mct-speak-box .hint {\n  margin-top: 5px;\n  font-size: 11px;\n  line-height: 1.5;\n  color: #fbbf24;\n}\n#mct-speak-box .hint:empty { display: none; }\n";
+  /*
+   * What is finished and what is still being said, told apart at a glance.
+   *
+   * The live line used to be the same shape as a finished row, only grey and
+   * italic -- and it could sit ABOVE a newer finished row, so the eye had no way
+   * to tell where "now" was. It is now a card of its own, always at the bottom,
+   * in the speaker's colour, saying in words that it is still being spoken.
+   */
+  style.textContent += `
+.mct-seg { animation: mct-in .22s ease-out; }
+@keyframes mct-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.mct-seg.mct-liverow {
+  position: relative;
+  margin-top: 10px;
+  padding: 7px 10px 8px 11px;
+  border-radius: 8px;
+  background: rgba(129, 140, 248, .06);
+  border: 1px solid rgba(129, 140, 248, .16);
+  border-left: 3px solid var(--spk, #818cf8);
+  animation: none;
+}
+.mct-liverow .mct-spk { padding-right: 84px; }
+.mct-liverow .mct-txt.mct-live { opacity: 1; font-style: normal; color: #aeb4c2; }
+.mct-liverow .mct-tr, .mct-liverow .mct-lat { display: none; }
+.mct-livetag {
+  position: absolute; top: 8px; right: 10px;
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--spk, #818cf8); opacity: .85;
+}
+.mct-typing { display: inline-flex; gap: 3px; }
+.mct-typing i {
+  width: 4px; height: 4px; border-radius: 50%;
+  background: currentColor; animation: mct-dot 1.2s infinite ease-in-out;
+}
+.mct-typing i:nth-child(2) { animation-delay: .15s; }
+.mct-typing i:nth-child(3) { animation-delay: .3s; }
+@keyframes mct-dot {
+  0%, 70%, 100% { opacity: .25; transform: translateY(0); }
+  35%           { opacity: 1;   transform: translateY(-2px); }
+}
+
+/* A finished line whose translation is on its way. */
+.mct-tr.wait:empty { display: block; border-color: #374151; }
+.mct-tr.wait:empty::before {
+  content: "translating…";
+  color: #6b7280; font-size: 12px; font-style: italic;
+  animation: mct-pulse 1.4s ease-in-out infinite;
+}
+@keyframes mct-pulse { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mct-seg, .mct-typing i, .mct-tr.wait:empty::before { animation: none; }
+}
+`;
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -503,6 +559,8 @@
       el("button", { id: "mct-save",  text: "save", title: "write the transcript now" }),
       el("button", { id: "mct-speak", text: "\u25B6", title: "read the translation aloud" }),
       el("button", { id: "mct-gear",  text: "\u2699", title: "language and tools" }),
+      el("button", { id: "mct-pop",   text: "\u29c9",
+                     title: "open in its own window \u2014 drag it to another monitor" }),
       el("button", { id: "mct-max",   text: "\u2921", title: "maximise / restore" }),
       el("button", { id: "mct-hide",  text: "\u2013", title: "collapse" }),
       el("button", { id: "mct-close", text: "\u00d7", title: "close" }),
@@ -565,7 +623,10 @@
    * way in when auto-detect has not found captions yet and you need "find".
    */
   const launcher = el("div", { id: "mct-launcher", text: "\u25cf captions" });
-  launcher.onclick = () => setPanelOpen(true, /*byUser=*/true);
+  launcher.onclick = () => {
+    if (isPopped()) dockPanel();             // "bring it back"
+    else setPanelOpen(true, /*byUser=*/true);
+  };
 
   /**
    * Open and close only ever toggle visibility — the panel is never removed and its
@@ -590,11 +651,23 @@
    */
   let override = null;
 
+  /** The separate window the panel lives in when popped out, or null. */
+  let popWin = null;
+  const isPopped = () => {
+    try { return !!popWin && !popWin.closed && panel.ownerDocument === popWin.document; }
+    catch (e) { return false; }
+  };
+
   function setPanelOpen(open, byUser = false) {
+    // In its own window the panel is the whole window: closing that window is
+    // how you close it, and following the captions on and off would leave a
+    // blank window on the other monitor.
+    if (isPopped()) open = true;
     panelOpen = open;
     if (byUser) override = open ? "open" : "closed";
     panel.style.display    = open ? "flex" : "none";
-    launcher.style.display = open ? "none" : "block";
+    // While popped out, the pill stays in the meeting tab as the way back.
+    launcher.style.display = (open && !isPopped()) ? "none" : "block";
     if (open) toBottom();
   }
 
@@ -609,7 +682,8 @@
     // removes our node, put it back.
     every(() => {
       const host2 = document.body || document.documentElement;
-      if (!panel.isConnected) host2.appendChild(panel);
+      // Not while it is in its own window: that is where it is meant to be.
+      if (!panel.isConnected && !isPopped()) host2.appendChild(panel);
       if (!launcher.isConnected) host2.appendChild(launcher);
     }, 3000);
     console.log("[caption] panel mounted");
@@ -932,6 +1006,7 @@
   function removeRow(key) {
     const row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (row) row.remove();
+    rowOrd.delete(key);
   }
 
   /**
@@ -961,22 +1036,73 @@
     }
   }
 
+  /**
+   * Where each row belongs: the order in which its utterance STARTED.
+   *
+   * Rows used to be appended when they were created, and never moved. A finished
+   * sentence is created when its settle timer fires -- up to two seconds after the
+   * speaker stopped -- while the greyed line for the NEXT sentence is created the
+   * moment it starts. So the next sentence's live line routinely landed above the
+   * previous sentence's finished row, and stayed there for as long as the speaker
+   * kept talking: the newest translation sat below the text still being spoken.
+   *
+   * Two rules fix it, and placeRow() enforces both:
+   *   - every "still being said" row sits below every finished row
+   *   - within each group, rows are in the order their utterances began
+   */
+  const rowOrd = new Map();     // row key -> utterance order (fractional per row)
+  let utterSeq = 0;
+
+  const isLiveRow = (n) => !!n?.classList?.contains("mct-liverow");
+
+  function placeRow(row, live) {
+    const ord = Number(row.dataset.ord);
+    const kids = Array.from($log.children);
+    let before = null;
+    // Walk up from the bottom. Bounded, because the right place is always near
+    // the bottom and a long meeting has hundreds of rows.
+    for (let j = kids.length - 1, steps = 0; j >= 0 && steps < 40; j--, steps++) {
+      const k = kids[j];
+      if (k === row) continue;
+      // A finished row (or a divider) goes above every live row.
+      if (!live && isLiveRow(k)) { before = k; continue; }
+      if (live && !isLiveRow(k)) break;
+      // Then above anything that started later. A divider has no order and is a
+      // barrier: what is committed after a language change stays below it.
+      const kOrd = Number(k.dataset?.ord);
+      if (Number.isFinite(ord) && Number.isFinite(kOrd) && kOrd > ord) { before = k; continue; }
+      break;
+    }
+    $log.insertBefore(row, before);
+  }
+
   function render(key, speaker, text, final) {
     let row = $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
     if (!row) {
-      row = el("div", { cls: "mct-seg" }, [
+      const live = !final;
+      row = el("div", { cls: "mct-seg" + (live ? " mct-liverow" : "") }, [
         el("div", { cls: "mct-spk" }),
         el("div", { cls: "mct-txt" }),
         el("div", { cls: trClass() }),
         el("div", { cls: "mct-lat" }),
       ]);
+      if (live) {
+        // "Still being said", in words and in motion, so it never reads as a
+        // finished line that failed to translate.
+        row.appendChild(el("div", { cls: "mct-livetag" }, [
+          el("span", { cls: "mct-typing" }, [el("i"), el("i"), el("i")]),
+          el("span", { text: "speaking" }),
+        ]));
+      }
       row.dataset.k = key;
-      $log.appendChild(row);
+      if (rowOrd.has(key)) row.dataset.ord = String(rowOrd.get(key));
+      placeRow(row, live);
       trimLog();
     }
     const spk = row.querySelector(".mct-spk");
     spk.textContent = speaker || "";
     spk.style.color = colorFor(speaker);
+    row.style.setProperty?.("--spk", colorFor(speaker));
     row.dataset.spk = speaker || "";
     // A row created while a filter is active must respect it immediately, or the
     // filtered view silently gains rows as people keep talking.
@@ -1098,7 +1224,8 @@
       el("span", { cls: "t", text: new Date().toLocaleTimeString() }),
       el("span", { text }),
     ]);
-    $log.appendChild(row);
+    // Above any line still being spoken, like every finished row.
+    placeRow(row, false);
     trimLog();
     toBottom();
 
@@ -1302,6 +1429,12 @@
     // while it is in flight, and the reply that comes back is a translation into
     // THIS language, not the new one.
     const asked = prefs.target;
+
+    // Show that a translation is on its way, so a finished line with nothing under
+    // it yet reads as "coming" rather than "failed". A class, not text: the lane's
+    // text is what the transcript and the tests read, and stays empty until the
+    // translation itself arrives. renderTranslation resets the class.
+    $log.querySelector(`[data-k="${CSS.escape(key)}"] .mct-tr`)?.classList.add("wait");
 
     server.inflight++;
     paintStatus();
@@ -1699,6 +1832,15 @@
         const { leftover } = chunkSentences(complete);
         saying = [leftover, tail].filter(Boolean).join(" ");
       }
+
+      // When did this utterance start? Kept across revisions of the same line.
+      // A line whose opening no longer matches what was committed from it is a
+      // different utterance in a reused slot, and starts now.
+      const sameUtterance = prev && (!prev.committed ||
+        text.slice(0, 12) === prev.committed.slice(0, 12));
+      const ord = sameUtterance ? prev.ord : ++utterSeq;
+
+      rowOrd.set(key + "#live", ord + 0.999);
       render(key + "#live", speaker, saying, false);
 
       /*
@@ -1777,7 +1919,9 @@
         const stopped = !!pendingText;
 
         const commit = (text, end) => {
-          emit(`${key}#${cur.ends.length}`, cur.speaker, text);
+          const rowKey = `${key}#${cur.ends.length}`;
+          rowOrd.set(rowKey, cur.ord + Math.min(cur.ends.length, 998) / 1000);
+          emit(rowKey, cur.speaker, text);
           cur.ends.push(end);
           cur.committed = full.slice(0, end);
         };
@@ -1787,11 +1931,14 @@
 
         // The still-being-said line belongs at the bottom, after the rows.
         removeRow(key + "#live");
-        if (!stopped && pendingText) render(key + "#live", cur.speaker, pendingText, false);
+        if (!stopped && pendingText) {
+          rowOrd.set(key + "#live", cur.ord + 0.999);
+          render(key + "#live", cur.speaker, pendingText, false);
+        }
       }, wait);
 
       state.pending.set(key, {
-        speaker, text, timer,
+        speaker, text, timer, ord,
         committed: prev?.committed || "",  // the part of this line already in rows
         ends: prev?.ends || [],            // where each committed row ends in the line
       });
@@ -2237,8 +2384,166 @@
     toBottom();
   }
 
-  $max.onclick = () => setSize(sizeIx + 1);
+  $max.onclick = () => isPopped() ? toggleScreenFull() : setSize(sizeIx + 1);
   setSize(0);
+
+  // ---- pop out to its own window ---------------------------------------------
+  /**
+   * Move the panel into a separate browser window.
+   *
+   * Inside the meeting tab the panel always covers something -- usually the slide
+   * someone is presenting. In its own window it can go on a second monitor,
+   * be maximised there, and go full screen, while the meeting keeps the first.
+   *
+   * The panel itself MOVES into the new window; nothing is copied. Same nodes,
+   * same listeners, same transcript -- capture keeps running in the meeting tab
+   * and rows keep arriving exactly as before. Closing the window brings it back.
+   *
+   * A plain popup rather than Document Picture-in-Picture: a PiP window floats on
+   * top of everything and cannot be maximised, which is what this is for. PiP is
+   * the fallback for when popups are blocked.
+   */
+  const POP_KEY = "mct.popGeom";
+  let popGeom = null;
+  store.get(POP_KEY).then(v => { try { popGeom = JSON.parse(v || "null"); } catch (e) {} });
+
+  const $pop = panel.querySelector("#mct-pop");
+
+  const POP_CSS = `
+html, body { margin: 0; height: 100%; background: #14161c; overflow: hidden; }
+#mct-panel.popped {
+  position: fixed; inset: 0; width: auto; height: auto; max-height: none;
+  border: 0; border-radius: 0; resize: none; box-shadow: none; min-width: 0;
+}
+#mct-panel.popped #mct-head { cursor: default; padding: 10px 16px; }
+#mct-panel.popped #mct-hide { display: none; }
+/* Text grows with the window, so a maximised window on a big monitor is
+   readable from across a desk, and the column stays a comfortable width. */
+#mct-panel.popped #mct-log {
+  font-size: clamp(14px, 0.55vw + 9px, 26px);
+  padding: 18px max(20px, calc((100% - 72em) / 2));
+}
+#mct-panel.popped .mct-seg { margin-bottom: 1.1em; }
+#mct-panel.popped .mct-spk { font-size: .82em; }
+#mct-panel.popped .mct-tr  { font-size: 1.08em; }
+#mct-panel.popped .mct-lat { font-size: .7em; }
+#mct-panel.popped .mct-meta, #mct-panel.popped #mct-file { padding-left: 16px; }
+`;
+
+  function savePopGeom(w) {
+    try {
+      const g = { left: w.screenX, top: w.screenY, width: w.outerWidth, height: w.outerHeight };
+      if (!(g.width > 100 && g.height > 100)) return;      // closing; not a real size
+      const json = JSON.stringify(g);
+      // Only on change: this runs every two seconds, and chrome.storage.sync
+      // rejects writes beyond a hourly quota.
+      if (json === JSON.stringify(popGeom)) return;
+      popGeom = g;
+      store.set(POP_KEY, json);
+    } catch (e) { /* closed already */ }
+  }
+
+  function paintPop() {
+    const on = isPopped();
+    panel.classList.toggle("popped", on);
+    $pop.textContent = on ? "↩" : "⧉";
+    $pop.title = on ? "put it back in the meeting tab"
+                    : "open in its own window — drag it to another monitor";
+    $max.title = on ? "full screen on this monitor (Esc to leave)"
+                    : `${SIZES[sizeIx]} — click for ${SIZES[(sizeIx + 1) % SIZES.length]}`;
+    launcher.textContent = on ? "⧉ captions are in their own window — bring back"
+                              : "● captions";
+  }
+
+  async function popOut() {
+    if (isPopped()) { popWin.focus(); return; }
+
+    // Where it was last time -- on the other monitor, at the size it was left.
+    const g = popGeom || {
+      width: 760, height: Math.min(900, (globalThis.screen?.availHeight || 900) - 60),
+    };
+    let feats = `popup,width=${g.width},height=${g.height}`;
+    if (Number.isFinite(g.left) && Number.isFinite(g.top)) feats += `,left=${g.left},top=${g.top}`;
+
+    // A window is only any use if we can reach into its document.
+    const usable = (w) => { try { return !!(w && w.document && w.document.body); } catch (e) { return false; } };
+
+    let win = null;
+    try { win = window.open("", "mct-captions", feats); } catch (e) { /* blocked */ }
+    if (!usable(win)) {
+      try { win && win.close(); } catch (e) {}
+      win = null;
+      if (globalThis.documentPictureInPicture) {
+        try {
+          win = await documentPictureInPicture.requestWindow({ width: g.width, height: g.height });
+        } catch (e) { /* not allowed either */ }
+      }
+    }
+    if (!usable(win)) {
+      meta("could not open a window — allow pop-ups for this site and try again");
+      return;
+    }
+    const doc = win.document;
+
+    // A window reused by name may still hold a previous session's panel.
+    doc.head.replaceChildren();
+    doc.body.replaceChildren();
+    doc.title = "Captions — translated";
+    const s = doc.createElement("style");
+    s.textContent = style.textContent + POP_CSS;
+    doc.head.appendChild(s);
+
+    popWin = win;
+    collapsed = false;
+    applyLogVisibility();
+    doc.body.appendChild(panel);              // moves it; listeners come along
+    paintPop();
+    setPanelOpen(true);
+    toBottom(true);
+
+    // Closing the window, or reloading it, brings the panel home first.
+    win.addEventListener("pagehide", () => { savePopGeom(win); dockPanel(); });
+    win.addEventListener("resize", () => toBottom());
+    win.focus();
+  }
+
+  function dockPanel() {
+    if (!popWin) return;
+    const w = popWin;
+    popWin = null;
+    try { if (!w.closed) savePopGeom(w); } catch (e) {}
+    try { if (w.document.fullscreenElement) w.document.exitFullscreen(); } catch (e) {}
+    (document.body || document.documentElement).appendChild(panel);
+    paintPop();
+    setSize(sizeIx);
+    setPanelOpen(true, /*byUser=*/true);
+    toBottom(true);
+    try { if (!w.closed) w.close(); } catch (e) {}
+  }
+
+  /** Real full screen -- the whole monitor -- for the popped-out window. */
+  function toggleScreenFull() {
+    const d = popWin && popWin.document;
+    if (!d) return;
+    if (d.fullscreenElement) d.exitFullscreen();
+    else d.documentElement.requestFullscreen?.().catch(() => meta("full screen was refused"));
+  }
+
+  $pop.onclick = () => isPopped() ? dockPanel() : popOut();
+
+  // A popup cannot always tell us it closed (a crashed renderer, a window
+  // killed from the taskbar), so check. Also remember where it is now, so a
+  // panel moved to the other monitor opens there next time.
+  every(() => {
+    if (!popWin) return;
+    let closed = true;
+    try { closed = popWin.closed; } catch (e) {}
+    if (closed) dockPanel(); else savePopGeom(popWin);
+  }, 2000);
+
+  // Leaving the meeting closes the window rather than orphaning it.
+  addEventListener("pagehide", () => { try { popWin && popWin.close(); } catch (e) {} });
+  paintPop();
 
   // Escape leaves full screen. At that size the panel covers Teams completely, so
   // this is the only obvious way out — and it is what every full-screen view does.
@@ -2280,7 +2585,17 @@
     }
   };
 
-  panel.querySelector("#mct-close").onclick = () => setPanelOpen(false, /*byUser=*/true);
+  panel.querySelector("#mct-close").onclick = () => {
+    if (isPopped()) dockPanel();             // closes the window, panel comes home
+    setPanelOpen(false, /*byUser=*/true);
+  };
+
+  /**
+   * The clipboard of whichever window the panel is in. Writing to the meeting
+   * tab's clipboard from a click in the popped-out window fails with "Document
+   * is not focused" -- the click happened somewhere else.
+   */
+  const clip = () => (isPopped() ? popWin.navigator : navigator).clipboard;
 
   // Forces a write, seal and all. The timer handles the normal case; this is for
   // when you are about to close the laptop and want to be sure.
@@ -2296,7 +2611,7 @@
   $file.onclick = () => {
     const path = saved.path || (saved.dir ? `${saved.dir}/${SESSION}.md` : "");
     if (!path) return;
-    navigator.clipboard.writeText(path).then(
+    clip().writeText(path).then(
       () => meta("transcript path copied"),
       () => meta(path),
     );
@@ -2336,7 +2651,7 @@
     };
     const dump = tree(state.container);
     console.log("[caption] STRUCTURE ----\n" + dump);
-    navigator.clipboard.writeText(dump).then(
+    clip().writeText(dump).then(
       () => meta("structure copied to clipboard — paste it back"),
       () => meta("structure printed to console")
     );
@@ -2346,7 +2661,7 @@
     const txt = transcript.map(r => r.kind === "note"
       ? `\n-- ${r.text} --\n`
       : `${r.t} ${r.speaker ? r.speaker + ": " : ""}${r.text}`).join("\n");
-    navigator.clipboard.writeText(txt).then(() => meta(`copied ${transcript.length} segments`));
+    clip().writeText(txt).then(() => meta(`copied ${transcript.length} segments`));
   };
 
   panel.querySelector("#mct-hide").onclick = () => {
@@ -2366,6 +2681,7 @@
     head.addEventListener("mousedown", (e) => {
       if (e.target.tagName === "BUTTON") return;
       if (SIZES[sizeIx] === "full") return;    // it covers the page; nowhere to move it
+      if (isPopped()) return;                  // it IS the window; move the window
 
       const r = panel.getBoundingClientRect();
       sx = e.clientX; sy = e.clientY;

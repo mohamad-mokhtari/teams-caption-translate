@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Meeting Caption Translator",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Reads live meeting captions and translates them via a local service. Microsoft Teams; Google Meet is present but its selectors are unverified.",
   "permissions": [
     "storage",

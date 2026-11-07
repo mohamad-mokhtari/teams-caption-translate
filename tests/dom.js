@@ -100,6 +100,12 @@ class Node {
   get innerText() { return this.textContent; }
 
   get firstChild() { return this.children[0] || null; }
+  // A node in a second document (a popped-out window) is one whose root was
+  // tagged with that document. Everything else belongs to the page.
+  get ownerDocument() {
+    let n = this; while (n.parentElement) n = n.parentElement;
+    return n._ownerDoc || document;
+  }
   get parentNode() { return this.parentElement; }
   contains(n) { while (n) { if (n === this) return true; n = n.parentElement; } return false; }
   removeAttribute(k) { delete this.attributes[k]; }
@@ -108,7 +114,7 @@ class Node {
   get shadowRoot() { return null; }
   get isConnected() {
     let n = this; while (n.parentElement) n = n.parentElement;
-    return n === document.documentElement || n === document;
+    return n === document.documentElement || n === document || !!n._ownerDoc;
   }
 
   setAttribute(k, v) { this.attributes[k] = String(v); }
@@ -121,10 +127,24 @@ class Node {
     this._notify();
     return kid;
   }
+  insertBefore(kid, ref) {
+    if (!ref) return this.appendChild(kid);
+    if (kid.parentElement) kid.parentElement.removeChild(kid);
+    const i = this.children.indexOf(ref);
+    if (i < 0) throw new Error("insertBefore: reference is not a child");
+    kid.parentElement = this;
+    this.children.splice(i, 0, kid);
+    this._notify();
+    return kid;
+  }
   removeChild(kid) {
     const i = this.children.indexOf(kid);
     if (i >= 0) { this.children.splice(i, 1); kid.parentElement = null; this._notify(); }
     return kid;
+  }
+  replaceChildren(...kids) {
+    for (const k of this.children.slice()) this.removeChild(k);
+    for (const k of kids) this.appendChild(k);
   }
   remove() { if (this.parentElement) this.parentElement.removeChild(this); }
 

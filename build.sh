@@ -37,6 +37,7 @@ sub("""  console.log(
     """  window.__mctCleanup = () => {
     if (state.observer) state.observer.disconnect();
     for (const t of timers) clearInterval(t);
+    try { if (popWin) popWin.close(); } catch (e) {}
     document.querySelectorAll("#mct-panel, #mct-launcher").forEach(n => n.remove());
   };
 

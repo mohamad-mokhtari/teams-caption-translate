@@ -49,6 +49,7 @@ def test_panel() -> None:
       const $log = { scrollTop: 0, scrollHeight: 0 };
       function flushTranscript() { flushes++; }
       function toBottom() {}          // scrolling is covered by test_scroll
+      const isPopped = () => false;   // docked; the pop-out window is tested in test_smoke
     """ + setter + "function poll(captionsOn) {" + decide + "}")
 
     poll = lambda on: c.eval(f"poll({str(bool(on)).lower()})")
@@ -274,6 +275,7 @@ def _drag_harness(body: str) -> quickjs.Context:
     c.eval("""
       const SIZES = ["small", "large", "full"];
       let sizeIx = 0;
+      const isPopped = () => false;
       const innerWidth = 1600, innerHeight = 900;
       const handlers = {};
       const rect = { left: 1204, top: 500, width: 380, height: 300 };

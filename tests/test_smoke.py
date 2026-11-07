@@ -1176,6 +1176,130 @@ def test_speaks_from_outside_the_tab():
           ["TR:A sentence spoken with no extension in the picture."])
 
 
+def test_live_line_stays_below_finished_rows():
+    """
+    The bug in the screenshot of 2026-10-22.
+
+    One speaker, two sentences back to back. The first finishes, and while its
+    settle timer runs the second one starts -- so the second one's "still being
+    said" row was created first. When the first one's timer fired, its finished
+    row was appended below it, and for as long as the speaker kept talking the
+    newest translation sat underneath the sentence still being spoken.
+    """
+    print("Smoke: the line still being spoken stays below every finished one")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Brett", "We have to check the GDPR laws and keep the data in region.", "a")')
+    tick(c, 300)                                   # inside A's settle window
+    c.eval('say("Brett", "So there is a lot of stuff", "b")')
+    tick(c, 600)                                   # A's timer fires now
+    for more in ("So there is a lot of stuff security needs to sign off on",
+                 "So there is a lot of stuff security needs to sign off on before I share"):
+        c.eval(f'say("Brett", {json.dumps(more)}, "b")')
+        tick(c, 500)                               # B keeps going; never settles
+
+    got = json.loads(rows(c))
+    check("  two rows", len(got), 2)
+    if len(got) == 2:
+        check("  finished sentence first", got[0]["text"],
+              "We have to check the GDPR laws and keep the data in region.")
+        check("  and it is translated", got[0]["tr"].startswith("TR:"), True)
+        check("  the live line last", got[1]["live"], True)
+
+    print("Smoke: and once it finishes, the order is the order it was said")
+    c.eval('say("Brett", "So there is a lot of stuff security needs to sign off on before I share.", "b")')
+    tick(c, 1500)
+    got = json.loads(rows(c))
+    check("  no live row left", [r["live"] for r in got], [False, False])
+    check("  spoken order", [r["text"][:8] for r in got], ["We have ", "So there"])
+
+    print("Smoke: two people talking over each other")
+    c.eval('say("Sarah", "Quick question,", "c")')
+    tick(c, 100)
+    c.eval('say("Brett", "Hold on", "d")')
+    tick(c, 100)
+    c.eval('say("Sarah", "Quick question, is that in region?", "c")')
+    tick(c, 800)                                   # Sarah finishes; Brett still live
+    got = json.loads(rows(c))
+    check("  finished above live", [r["live"] for r in got], [False, False, False, True])
+    check("  Sarah's line is the newest finished", got[2]["speaker"], "Sarah")
+
+    print("Smoke: a language divider never lands under a live line")
+    c.eval('const sel = document.querySelector("#mct-lang"); sel.value = "es"; sel.onchange()')
+    tick(c, 50)
+    kinds = c.eval("""JSON.stringify(document.querySelector("#mct-log").children
+                       .map(n => n.className.includes("mct-note") ? "note"
+                                 : n.className.includes("mct-liverow") ? "live" : "row"))""")
+    kinds = json.loads(kinds)
+    check("  live line still last", kinds[-1], "live")
+    check("  divider directly above it", kinds[-2], "note")
+
+
+POPUP = """
+function fakePopup() {
+  const doc = {
+    title: "", fullscreenElement: null,
+    head: new Node("head"), body: new Node("body"),
+    createElement: (t) => new Node(t),
+  };
+  doc.head._ownerDoc = doc; doc.body._ownerDoc = doc;
+  const listeners = {};
+  const win = {
+    document: doc, closed: false, navigator,
+    screenX: 1920, screenY: 0, outerWidth: 1920, outerHeight: 1080,
+    focus() {}, close() { this.closed = true; (listeners.pagehide || []).forEach(f => f()); },
+    addEventListener(t, f) { (listeners[t] ||= []).push(f); },
+  };
+  return win;
+}
+let popup = null;
+window.open = () => (popup = fakePopup());
+"""
+
+
+def test_pop_out():
+    print("Smoke: the panel moves into its own window, and keeps working there")
+    c = boot('detectAnswer = {lang:"en", name:"English"};' + POPUP)
+    c.eval('say("Sarah", "Before the window.")')
+    tick(c, 1500)
+    c.eval('click("#mct-pop")')
+    pump(c)
+    where = lambda: c.eval('document.querySelector("#mct-panel") ? "page" : '
+                           '(popup && popup.document.body.querySelector("#mct-panel") ? "popup" : "nowhere")')
+    check("  in the popup", where(), "popup")
+    check("  styled there too", c.eval('popup.document.head.children.length'), 1)
+    check("  marked popped", c.eval('popup.document.body.querySelector("#mct-panel").classList.contains("popped")'), True)
+    check("  the pill offers the way back", "bring back" in c.eval('document.querySelector("#mct-launcher").textContent'), True)
+
+    c.eval('say("Sarah", "After the window.")')
+    tick(c, 1500)
+    texts = c.eval('JSON.stringify(popup.document.body.querySelectorAll(".mct-seg").map(r => r.querySelector(".mct-tr").textContent))')
+    check("  new captions arrive in the window", json.loads(texts),
+          ["TR:Before the window.", "TR:After the window."])
+
+    print("Smoke: closing the window brings the panel home, history intact")
+    c.eval('popup.close()')
+    pump(c)
+    check("  back in the page", where(), "page")
+    check("  rows kept", len(json.loads(rows(c))), 2)
+    check("  pill back to normal", c.eval('document.querySelector("#mct-launcher").textContent'), "● captions")
+
+    print("Smoke: a window that just vanishes is noticed too")
+    c.eval('click("#mct-pop")')
+    pump(c)
+    c.eval('popup.closed = true')                 # killed, no pagehide
+    tick(c, 2100)
+    check("  back in the page", where(), "page")
+
+    print("Smoke: pop-ups blocked says so instead of doing nothing")
+    c.eval('window.open = () => null')
+    c.eval('click("#mct-pop")')
+    pump(c)
+    check("  still in the page", where(), "page")
+    check("  and says why", "allow pop-ups" in c.eval('document.querySelector("#mct-meta").textContent'), True)
+
+
+test_live_line_stays_below_finished_rows()
+test_pop_out()
 test_speaks_from_outside_the_tab()
 test_read_aloud()
 test_service_down()
