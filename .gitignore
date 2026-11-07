@@ -15,3 +15,7 @@ _downloads/
 .vscode/
 .idea/
 .DS_Store
+
+# Real meeting transcripts and the evaluation results built from them -- colleagues'
+# names and work discussion. Local only; tools/eval_translation.py reads them here.
+sample_translate_meeting/
