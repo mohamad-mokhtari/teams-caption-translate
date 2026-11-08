@@ -906,11 +906,11 @@
       $why.appendChild(el("b", { text: "\u2699 \u2192 reconnect captions" }));
       $why.appendChild(el("span", { text: ". Click here to do that now." }));
     } else if (reason === "offline") {
-      $why.appendChild(el("span", { text: "The translation companion is not running, so "
-                                        + "nothing is being translated. Start it with " }));
-      $why.appendChild(el("b", { text: "server/run.sh" }));
-      $why.appendChild(el("span", { text: " and leave that window open. Click here to "
-                                        + "try again." }));
+      // Two ways it can be started now; name both, the app first.
+      $why.appendChild(el("span", { text: "The translator is not running, so nothing is "
+                                        + "being translated. Start " }));
+      $why.appendChild(el("b", { text: "Caption Translator" }));
+      $why.appendChild(el("span", { text: " (or server/run.sh). Click here to try again." }));
     } else {
       // Rebuilt each time so it names the languages currently in play.
       $why.appendChild(el("span", { text: "The captions are already in " }));

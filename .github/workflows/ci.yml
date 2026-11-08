@@ -1,0 +1,58 @@
+# Every push: run all the offline tests, then build the Windows app and prove the
+# built .exe starts. A tag like v1.4.0 also publishes a GitHub release with the zip.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m venv server/.venv
+          server/.venv/bin/pip install --quiet -r server/requirements.txt quickjs pillow
+      - name: Check console-test.js is up to date with content.js
+        run: |
+          ./build.sh
+          git diff --exit-code console-test.js || (echo "::error::console-test.js is stale -- run ./build.sh and commit it" && exit 1)
+      - name: All tests (no API key, no network)
+        run: bash tests/run_all.sh
+
+  windows-app:
+    needs: tests
+    runs-on: windows-latest
+    permissions:
+      contents: write          # only used to publish a release on a v* tag
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: python -m pip install --quiet -r desktop/requirements.txt
+      - name: Build, self-test the built exe, package
+        run: python desktop/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CaptionTranslator-windows
+          path: desktop/dist/*.zip
+          if-no-files-found: error
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/*.zip
+          generate_release_notes: true

@@ -1,10 +1,17 @@
 """Settings for the translation companion. Loaded from .env."""
+import os
+
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Where the settings live. `.env` next to the server by default; the desktop app
+# points this at a file in the user's profile (%APPDATA%\CaptionTranslator),
+# because an installed program cannot write beside itself.
+ENV_FILE = os.environ.get("MCT_ENV_FILE", ".env")
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, env_file_encoding="utf-8", extra="ignore")
 
     # --- what we translate into ---
     # The DEFAULT only. Each reader chooses their own language in the panel and it

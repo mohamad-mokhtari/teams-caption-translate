@@ -603,8 +603,8 @@ def test_service_down():
     why = c.eval('document.querySelector("#mct-why").textContent')
     check("  banner is up",
           bool(c.eval('document.querySelector("#mct-panel").classList.contains("why")')), True)
-    check("  says what is wrong", "companion is not running" in why, True)
-    check("  says how to fix it", "server/run.sh" in why, True)
+    check("  says what is wrong", "translator is not running" in why, True)
+    check("  says how to fix it", ("Caption Translator" in why, "server/run.sh" in why), (True, True))
     check("  not confused with pass-through",
           bool(c.eval('document.querySelector("#mct-panel").classList.contains("passthrough")')),
           False)

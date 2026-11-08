@@ -11,7 +11,12 @@ fail=0
 $PY tests/syntax_check.py extension/content.js || fail=1
 $PY tests/syntax_check.py console-test.js      || fail=1
 
-for t in test_smoke test_panel test_language test_transcript test_server; do
+tests="test_smoke test_panel test_language test_transcript test_server"
+# The desktop app's tests need pillow (its icon). Say so rather than skip silently.
+if $PY -c "import PIL" 2>/dev/null; then tests="$tests test_desktop"
+else echo "test_desktop       skipped -- $PY -m pip install pillow"; fi
+
+for t in $tests; do
   out=$($PY "tests/$t.py" 2>&1) || fail=1
   printf "%-18s %3d pass" "$t" "$(grep -c PASS <<<"$out")"
   n=$(grep -c FAIL <<<"$out" || true)
@@ -19,6 +24,6 @@ for t in test_smoke test_panel test_language test_transcript test_server; do
   grep -q Traceback <<<"$out" && { echo "$out" | tail -20; fail=1; }
 done
 
-rm -rf /tmp/mct-transcript-* /tmp/mct-lang-* 2>/dev/null
+rm -rf /tmp/mct-transcript-* /tmp/mct-lang-* /tmp/mct-desktop-* 2>/dev/null
 [ "$fail" = 0 ] && echo "all green" || echo "FAILURES"
 exit "$fail"

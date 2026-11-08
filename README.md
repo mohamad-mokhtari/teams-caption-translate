@@ -15,6 +15,7 @@ monitor**, read aloud on request, and written to a Markdown transcript.
 |---|---|
 | `extension/` | Edge/Chrome extension: captures captions, renders the panel, speaks |
 | `server/` | FastAPI companion on `127.0.0.1:8100`: translation, language detection, summaries, transcripts |
+| `desktop/` | **Caption Translator for Windows**: the companion as a tray app — no Python, terminal or git |
 | `console-test.js` | The extension's code, pasteable into DevTools (generated — see below) |
 | `tools/probe.js` | Works out caption markup on a new platform from a live call |
 | `tests/` | Everything offline: `tests/run_all.sh` |
@@ -23,7 +24,36 @@ monitor**, read aloud on request, and written to a Markdown transcript.
 
 ## Getting started
 
-### Setting it up from zero
+### On Windows: the desktop app (easiest)
+
+1. Download **`CaptionTranslator-<version>-windows.zip`** from the repository's
+   [Releases](https://github.com/mohamad-mokhtari/teams-caption-translate/releases)
+   (or, between releases, from the latest **CI** run's artifacts under *Actions*) and unzip it.
+2. Run **`CaptionTranslator.exe`**. It is not code-signed, so Windows may warn about an
+   unknown publisher: **More info → Run anyway**.
+3. A settings page opens in your browser. Paste your OpenAI API key, choose the model
+   and your language, add your team's jargon to the glossary, press **Save**, then
+   **Test** — it translates one sentence so you know the key works.
+4. Load the extension from the zip's `extension` folder (below), open Teams in the
+   browser and turn on live captions.
+
+A speech-bubble icon sits next to the clock: **green** translating, **amber** needs a
+key, and its tooltip names the model in use. Right-click it for **Settings**, **Open
+transcripts folder**, **Start with Windows** and **Quit**. Changes made in Settings
+apply from the next caption — no restart.
+
+Settings are kept in `%APPDATA%\CaptionTranslator\settings.env` (same format as
+`server/.env`), and the app's log beside them.
+
+> **One translator at a time.** The app and `server\run.bat` both use port 8100, which
+> the extension calls. Close any old `run.bat` window first; the app says so if it finds
+> one running.
+
+> **The settings page is locked to the tray's link.** It runs on `127.0.0.1`, which any
+> website you visit could try to reach, so it needs a secret that only the tray menu
+> knows, refuses requests from other sites, and never shows the saved key in full.
+
+### From source (any OS, for development)
 
 On your own laptop, once:
 
@@ -671,7 +701,15 @@ server/.venv/bin/python -m pip install quickjs
 tests/run_all.sh
 ```
 
-363 checks, all offline — nothing calls a provider, so they run without a key.
+413 checks, all offline — nothing calls a provider, so they run without a key.
+
+`test_desktop.py` covers the tray app without needing a screen: the settings file
+(hand edits survive a save), settings applying live, the settings page's lock (token,
+origin, host), the key never reaching the page, and the background server. CI also
+builds the Windows `.exe` on every push and runs it with `--selftest`, because a frozen
+build only fails on a missing module when it runs.
+
+To build the `.exe` yourself on Windows: `desktop\build_windows.bat`.
 
 `test_server.py` covers the companion: requests overlap rather than queueing (four
 lines in flight take one provider call's time, not four), a summary does not hold up

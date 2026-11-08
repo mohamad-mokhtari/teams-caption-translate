@@ -1,0 +1,7 @@
+# The translator itself
+-r ../server/requirements.txt
+# The tray app around it
+pystray>=0.19
+pillow>=10.0
+# Building the .exe (Windows)
+pyinstaller>=6.0

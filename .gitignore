@@ -19,3 +19,8 @@ _downloads/
 # Real meeting transcripts and the evaluation results built from them -- colleagues'
 # names and work discussion. Local only; tools/eval_translation.py reads them here.
 sample_translate_meeting/
+
+# Desktop app build output
+desktop/build/
+desktop/dist/
+desktop/.build-venv/
