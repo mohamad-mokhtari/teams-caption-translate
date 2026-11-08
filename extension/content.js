@@ -165,7 +165,10 @@
   // browser treats localhost as a trustworthy origin, so an https page may call it
   // without tripping mixed-content rules.
   const SERVER = "http://127.0.0.1:8100";
-  const CONTEXT_N = 3;     // preceding segments sent so pronouns resolve
+  // Preceding lines sent with each one. 12, not 3: measured on real meetings,
+  // misheard technical terms are only recoverable when the model can see what
+  // the conversation is about (tools/eval_translation.py).
+  const CONTEXT_N = 12;
 
   /**
    * Saving the meeting to a Markdown file.
@@ -206,6 +209,7 @@
     inflight: 0,
     lastMs: 0,
     transcripts: false,   // does the companion save transcripts?
+    turns: false,         // does it offer /translate-turn? (older ones do not)
   };
 
   /** Where the meeting is being written, and whether the last write worked. */
@@ -274,8 +278,12 @@
     },
   };
 
-  /** Recent English segments, for context. Kept short — the point is resolving
-   *  "he"/"it"/"that", not summarising the meeting. */
+  /**
+   * The last few lines, for context: who said each, what they said, and how
+   * this reader was shown it. Names resolve "he" and "you"; the reader's own
+   * earlier translations keep a term rendered the same way all meeting.
+   * [{key, speaker, text, translation}]
+   */
   const recent = [];
 
   /**
@@ -527,6 +535,39 @@
   .mct-seg, .mct-typing i, .mct-tr.wait:empty::before { animation: none; }
 }
 `;
+  /*
+   * A speaker's turn, retranslated as a whole.
+   *
+   * Its lines stay (the English is what was said, and a reader cross-checks
+   * against it), grouped under one name; their line-by-line translations step
+   * aside for the single turn translation underneath, which reads as sentences
+   * rather than fragments. "line by line" brings the old ones back.
+   */
+  style.textContent += `
+.mct-seg.mct-in-turn { margin-bottom: 2px; }
+.mct-seg.mct-in-turn:not(.mct-turn-first) .mct-spk { display: none; }
+.mct-seg.mct-in-turn:not(.mct-show-lines) .mct-tr,
+.mct-seg.mct-in-turn:not(.mct-show-lines) .mct-lat { display: none; }
+.mct-seg.mct-show-lines .mct-tr { opacity: .6; }
+.mct-seg.mct-refining .mct-tr { animation: mct-pulse 1.4s ease-in-out infinite; }
+
+.mct-turn { margin: 6px 0 12px; animation: mct-in .25s ease-out; }
+.mct-turn .mct-turn-tr { line-height: 1.75; }
+.mct-turn-meta {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 3px; font-size: 10px; color: #6b7280;
+}
+.mct-turn-badge { color: #34d399; font-weight: 600; letter-spacing: .03em; }
+.mct-turn-toggle {
+  background: none; border: 0; padding: 0; cursor: pointer;
+  color: #6b7280; font: inherit; text-decoration: underline dotted;
+}
+.mct-turn-toggle:hover { color: #9096a3; }
+#mct-panel.passthrough .mct-turn { display: none; }
+
+.mct-check { display: flex !important; gap: 6px; align-items: flex-start; line-height: 1.4; cursor: pointer; }
+.mct-check input { margin-top: 2px; }
+`;
   (document.head || document.documentElement).appendChild(style);
 
   /**
@@ -582,6 +623,11 @@
         el("select", { id: "mct-lang" }),
       ]),
       el("div", { id: "mct-detected" }),
+      el("label", { cls: "mct-check" }, [
+        el("input", { type: "checkbox", id: "mct-refine" }),
+        el("span", { text: "Retranslate each speaker\u2019s turn as a whole when they stop "
+                         + "\u2014 reads much better, about a third more requests" }),
+      ]),
       el("div", { id: "mct-speak-box" }, [
         el("label", { text: "Read aloud \u2014 voice" }),
         el("select", { id: "mct-voice" }),
@@ -1140,7 +1186,7 @@
 
   function setFilter(name) {
     speakerFilter = name;
-    for (const row of $log.querySelectorAll(".mct-seg")) {
+    for (const row of [...$log.querySelectorAll(".mct-seg"), ...$log.querySelectorAll(".mct-turn")]) {
       row.style.display = (!name || row.dataset.spk === name) ? "" : "none";
     }
     renderChips();
@@ -1190,7 +1236,10 @@
     // translation is honest, one with "translator offline" written under it is not.
     if (!error && text) {
       const rec = transcript.findLast?.(r => r.key === key && !r.saved);
-      if (rec) rec.translation = text;
+      // A turn translation already speaks for this line in the file.
+      if (rec && !rec.inTurn) rec.translation = text;
+      const ctx = recent.find(r => r.key === key);
+      if (ctx) ctx.translation = text;
 
       // Once per row. A row can be retranslated when the recogniser revises it,
       // and hearing the same sentence twice is worse than missing the correction.
@@ -1256,9 +1305,14 @@
     render(key, speaker, text, true);
     console.log(`[caption]${revised ? " (revised)" : ""}`, speaker ? speaker + ":" : "", text);
 
-    // Context is the English history, not the translations.
-    if (!revised) { recent.push(text); while (recent.length > 10) recent.shift(); }
-    else if (recent.length) recent[recent.length - 1] = text;
+    // Context for later lines. The translation is filled in when it arrives.
+    const had = recent.find(r => r.key === key);
+    if (had) had.text = text;
+    else {
+      recent.push({ key, speaker, text, translation: "" });
+      while (recent.length > CONTEXT_N + 4) recent.shift();
+    }
+    if (!revised) noteTurnRow(key, speaker);
 
     remember(speaker, text, revised);
 
@@ -1289,6 +1343,7 @@
       const cfg = await r.json();
       server.ok = true;
       server.transcripts = !!cfg.transcript_enabled;
+      server.turns = !!cfg.turns;
 
       if (Array.isArray(cfg.languages) && cfg.languages.length) {
         langs.list = cfg.languages;
@@ -1444,7 +1499,9 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           key, speaker, text,
-          context: recent.slice(-CONTEXT_N),
+          // Older companions read `context`; current ones prefer `history`.
+          context: historyBefore(key).map(r => r.text),
+          history: historyBefore(key),
           target: asked,
           // A hint, not an instruction. Empty until detection has run.
           source: caption.lang || undefined,
@@ -1474,6 +1531,146 @@
       paintStatus();
     }
   }
+
+  /** The conversation before line `key`, as context for translating it. */
+  function historyBefore(key) {
+    const i = recent.findIndex(r => r.key === key);
+    const upto = i < 0 ? recent : recent.slice(0, i);
+    return upto.slice(-CONTEXT_N).map(({ speaker, text, translation }) =>
+      ({ speaker: speaker || "", text, translation: translation || "" }));
+  }
+
+  // ---------- whole-turn translation ---------------------------------------
+
+  /**
+   * Retranslate a speaker's turn as a whole once they stop.
+   *
+   * Line by line, the translator never sees a sentence whole: Teams cuts
+   * captions wherever the speaker paused, and Persian -- verb last -- cannot be
+   * written well from half a sentence. Each line is still translated within a
+   * second, so nobody waits; then, when the speaker stops, their lines are
+   * translated again together and that one translation replaces theirs. Measured
+   * on real meetings this was the largest single gain: 7.6 -> 9.1 out of 10 on
+   * the same model.
+   *
+   * A turn ends when someone else speaks, when the speaker has been quiet for
+   * TURN_IDLE_MS, or when it grows past TURN_MAX_ROWS / TURN_MAX_CHARS -- so a
+   * long monologue is refined in pieces as it goes rather than only at the end.
+   */
+  const TURN_IDLE_MS   = 3000;
+  const TURN_MAX_ROWS  = 6;
+  const TURN_MAX_CHARS = 700;
+  const REFINE_KEY = "mct.refine";
+  const turns = { on: true, seq: 0, open: null, done: [] };
+
+  const rowEl = (key) => $log.querySelector(`[data-k="${CSS.escape(key)}"]`);
+
+  function noteTurnRow(key, speaker) {
+    let t = turns.open;
+    if (t && t.speaker !== speaker) { closeTurn(t); t = null; }
+    if (!t) {
+      t = turns.open = { id: `T${++turns.seq}`, speaker, keys: [], timer: 0,
+                         history: historyBefore(key) };
+    }
+    if (!t.keys.includes(key)) t.keys.push(key);
+    clearTimeout(t.timer);
+    const chars = t.keys.reduce((n, k) => n + (rowEl(k)?.querySelector(".mct-txt")?.textContent.length || 0), 0);
+    if (t.keys.length >= TURN_MAX_ROWS || chars >= TURN_MAX_CHARS) { closeTurn(t); return; }
+    t.timer = setTimeout(() => idleTurn(t), TURN_IDLE_MS);
+  }
+
+  function idleTurn(t) {
+    if (turns.open !== t) return;
+    // Still mid-sentence: the next line belongs to this turn. Wait for it.
+    const live = $log.querySelector(`.mct-liverow[data-spk="${CSS.escape(t.speaker || "")}"]`);
+    if (live) { t.timer = setTimeout(() => idleTurn(t), TURN_IDLE_MS); return; }
+    closeTurn(t);
+  }
+
+  function closeTurn(t) {
+    clearTimeout(t.timer);
+    if (turns.open === t) turns.open = null;
+    // One line is already a whole turn: its own translation saw all of it.
+    const keys = t.keys.filter(k => rowEl(k));
+    if (keys.length < 2) return;
+    if (!turns.on || !server.ok || !server.turns || passthrough()) return;
+    requestTurn(t, keys);
+  }
+
+  async function requestTurn(t, keys) {
+    const lines = keys.map(k => rowEl(k).querySelector(".mct-txt").textContent);
+    const asked = prefs.target;
+    for (const k of keys) rowEl(k)?.classList.add("mct-refining");
+    let d = null;
+    try {
+      const r = await fetch(`${SERVER}/translate-turn`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          turn: t.id, speaker: t.speaker, lines, history: t.history,
+          prior_turns: turns.done.slice(-3), target: asked,
+          source: caption.lang || undefined,
+        }),
+      });
+      // An older companion has no such endpoint. Lines it is, quietly.
+      if (r.status === 404) { server.turns = false; }
+      else if (r.ok) d = await r.json();
+    } catch (e) { /* the line translations stand */ }
+    for (const k of keys) rowEl(k)?.classList.remove("mct-refining");
+    if (!d || d.error || !d.translation || d.passthrough) return;
+    // Asked in one language, answered after the reader switched: not theirs now.
+    if (asked !== prefs.target) return;
+    renderTurn(t, keys, d.translation, asked);
+  }
+
+  function renderTurn(t, keys, text, lang) {
+    const rows = keys.map(rowEl).filter(Boolean);
+    if (!rows.length) return;
+    const last = rows[rows.length - 1];
+
+    const toggle = el("button", { cls: "mct-turn-toggle", text: "line by line" });
+    const block = el("div", { cls: "mct-turn" }, [
+      el("div", { cls: trClass("", lang) + " mct-turn-tr", text }),
+      el("div", { cls: "mct-turn-meta" }, [
+        el("span", { cls: "mct-turn-badge", text: "✓ whole turn" }),
+        toggle,
+      ]),
+    ]);
+    block.dataset.turn = t.id;
+    block.dataset.spk = t.speaker || "";
+    block.dataset.ord = String(Number(last.dataset.ord || 0) + 0.0001);
+    block.style.display = (!speakerFilter || speakerFilter === t.speaker) ? "" : "none";
+
+    for (const r of rows) { r.classList.add("mct-in-turn"); r.dataset.turn = t.id; }
+    rows[0].classList.add("mct-turn-first");
+    // Directly under the turn's last line.
+    const kids = Array.from($log.children);
+    $log.insertBefore(block, kids[kids.indexOf(last) + 1] || null);
+
+    toggle.onclick = () => {
+      const open = !block.classList.contains("lines");
+      block.classList.toggle("lines", open);
+      for (const r of rows) r.classList.toggle("mct-show-lines", open);
+      toggle.textContent = open ? "hide lines" : "line by line";
+    };
+
+    turns.done.push(text);
+    while (turns.done.length > 3) turns.done.shift();
+
+    // The file gets the whole-turn translation once, under the turn's last line
+    // -- but only while none of the turn is on disk yet; the file is append-only.
+    const lastRec = (k) => { for (let i = transcript.length - 1; i >= 0; i--) if (transcript[i].key === k) return transcript[i]; return null; };
+    const recs = keys.map(lastRec).filter(Boolean);
+    if (recs.length === keys.length && recs.every(r => !r.saved)) {
+      recs.forEach((r, i) => { r.inTurn = true; r.translation = i === recs.length - 1 ? text : ""; });
+    }
+    toBottom();
+  }
+
+  const $refine = panel.querySelector("#mct-refine");
+  $refine.onchange = () => { turns.on = !!$refine.checked; store.set(REFINE_KEY, turns.on ? "1" : "0"); };
+  store.get(REFINE_KEY).then(v => { turns.on = v !== "0"; $refine.checked = turns.on; });
+  $refine.checked = true;
 
   // ---------- reading it aloud ---------------------------------------------
 

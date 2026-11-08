@@ -22,32 +22,101 @@ from . import languages
 from .config import settings
 from .providers import call
 
+# What the live prompt asks for, and why -- measured against real meetings with
+# tools/eval_translation.py (Nov 2026; 120 caption lines from three meetings, each
+# speaker turn scored blind out of 10, long turns weighted more):
+#
+#   the old prompt, 3 bare English lines of context            5.7
+#   this prompt, 12 lines with speakers + own earlier output   6.6 on gpt-4o-mini,
+#                                                              7.6-7.8 on gpt-6-luna /
+#                                                              gpt-5.6-luna
+#   ... plus each speaker turn retranslated when it ends       9.1 (gpt-6-luna)
+#
+# Most of the damage was not translation at all. Teams' recogniser hears technical
+# terms as ordinary words ("marriage request", "a in lease"), and a literal
+# translator renders the mishearing -- "marriage proposal", "a lease" -- which
+# reads as nonsense. Told to translate what the speaker plausibly SAID, with the
+# conversation in front of it, a current model recovers "merge request" and "a list".
 SYSTEM_TEMPLATE = """\
-You translate live meeting captions into {target}.{source_hint}
+You translate live captions of a software team's meeting into {target}, one caption at
+a time, for a developer who reads {target} far better than spoken English.{source_hint}
 
-The text comes from automatic speech recognition of a live meeting, so expect
-fragments, false starts, filler words, and missing punctuation. The reader is a
-developer following the meeting in real time.
+The captions come from automatic speech recognition (ASR). Expect:
+- MISHEARD WORDS. Technical terms are often heard as ordinary words that sound alike.
+  When a phrase makes no sense in a software meeting, translate what the speaker most
+  plausibly SAID, judging from the conversation so far and the glossary -- not the
+  literal mishearing. Do not do this when the literal text makes sense.
+- Captions cut mid-sentence. A caption may continue the previous one or stop before
+  its verb. Translate it so it reads naturally as a continuation of what came before.
+  If the verb has not been said yet, end with "…" rather than inventing one.
+- Repetitions, false starts and fillers ("I I", "so, so", "you know"): drop the noise
+  and keep the meaning. A caption that is ONLY filler gets its closest natural
+  equivalent, not silence.
 
-Rules:
-- Output ONLY the translation. No preamble, no notes, no quotation marks.
-- If the segment is ALREADY in {target}, return it unchanged. Do not paraphrase it
-  and do not translate it into anything else.
-- Translate the CURRENT segment only. Earlier context is there to resolve pronouns
-  and references — do not translate or repeat it.
-- Keep it natural and spoken, not formal or literary. This is speech.
-- If the segment is an incomplete fragment, translate it as a fragment. Do not
-  invent an ending.
-- Keep these technical terms in their original English form: {glossary}
-- Keep product names, people's names, code identifiers, file names and numbers
-  unchanged.
-- If the segment is only filler ("um", "you know", "right"), return it as the
-  closest natural equivalent rather than dropping it silently.
+Write natural, spoken {target} -- how a {target}-speaking developer would say it in a
+meeting -- not a word-for-word rendering. Keep these in English: {glossary}, plus
+product names, people's names, code identifiers, table names and numbers.
+Use the same {target} wording as your earlier translations for the same terms.
+
+If the caption is ALREADY in {target}, return it unchanged.
+
+Output ONLY the translation of the CURRENT caption -- no preamble, notes or quotation
+marks. Never translate or repeat the earlier ones; they are there so you understand it.
+"""
+
+TURN_TEMPLATE = """\
+You translate live captions of a software team's meeting into {target}, one speaker's
+turn at a time, for a developer who reads {target} far better than spoken English.{source_hint}
+
+The CURRENT TURN is several consecutive captions from one speaker, produced by
+automatic speech recognition (ASR) and cut wherever they paused. Expect:
+- MISHEARD WORDS. Technical terms are often heard as ordinary words that sound alike.
+  When a phrase makes no sense in a software meeting, translate what the speaker most
+  plausibly SAID, judging from the conversation and the glossary. Do not do this when
+  the literal text makes sense.
+- Fragments, repetitions, false starts and fillers. Join the fragments into
+  well-formed {target} sentences; drop the noise; keep every point the speaker made.
+
+Do not add anything the speaker did not say, and do not leave out any item they
+listed. Write natural, spoken {target} -- how a {target}-speaking developer would say
+it -- not a word-for-word rendering. Keep these in English: {glossary}, plus product
+names, people's names, code identifiers, table names and numbers. Use the same
+{target} wording as your earlier translations for the same terms.
+
+Output ONLY the translation of the CURRENT TURN -- no preamble, notes or quotation
+marks. Never translate the earlier conversation.
 """
 
 
+def _source_hint(source_name: str) -> str:
+    return (f"\n\nThe captions appear to be in {source_name}, but trust the text in front "
+            f"of you over that." if source_name else "")
+
+
+def _conversation(history: list[dict], context: list[str]) -> tuple[list[str], list[str]]:
+    """
+    (conversation lines, the reader's own recent translations).
+
+    `history` is what a current extension sends: [{speaker, text, translation}].
+    `context` is the older shape -- bare English strings -- kept so an extension
+    that has not been reloaded since the server was updated still works.
+
+    The translations go in a block of their own. Interleaved under each line, as
+    "[your Persian: ...]", small models copied the marker into their answer.
+    """
+    n = settings.context_segments
+    if history:
+        recent = history[-n:]
+        convo = [f"{h.get('speaker') or 'Someone'}: {h.get('text', '')}".strip()
+                 for h in recent if (h.get("text") or "").strip()]
+        own = [(h.get("translation") or "").strip() for h in recent[-6:]]
+        return convo, [t for t in own if t]
+    return [c for c in context[-n:] if c and c.strip()], []
+
+
 def build_messages(text: str, context: list[str], target_name: str,
-                   source_name: str = "") -> tuple[str, str]:
+                   source_name: str = "", history: list[dict] | None = None,
+                   speaker: str = "") -> tuple[str, str]:
     """
     The source language is a *hint*, never a requirement.
 
@@ -59,17 +128,35 @@ def build_messages(text: str, context: list[str], target_name: str,
     detector has actually seen the caption stream, and the model is told it may be
     wrong.
     """
-    system = SYSTEM_TEMPLATE.format(
-        target=target_name,
-        source_hint=(f"\n\nThe captions appear to be in {source_name}, but trust the text "
-                     f"in front of you over that." if source_name else ""),
-        glossary=settings.glossary,
-    )
-    if context:
-        recent = "\n".join(f"- {c}" for c in context[-settings.context_segments:])
-        user = f"Earlier in the meeting (context only, do NOT translate):\n{recent}\n\nCURRENT SEGMENT:\n{text}"
-    else:
-        user = f"CURRENT SEGMENT:\n{text}"
+    system = SYSTEM_TEMPLATE.format(target=target_name, source_hint=_source_hint(source_name),
+                                    glossary=settings.glossary)
+    convo, own = _conversation(history or [], context or [])
+    user = ""
+    if convo:
+        user += "Conversation so far (context only):\n" + "\n".join(convo) + "\n\n"
+    if own:
+        user += ("How you translated the last few captions (reuse the same terms):\n"
+                 + "\n".join(own) + "\n\n")
+    who = f" -- {speaker}" if speaker else ""
+    user += f"CURRENT CAPTION{who}:\n{text}\n\nTranslation:"
+    return system, user
+
+
+def build_turn_messages(lines: list[str], speaker: str, target_name: str,
+                        source_name: str = "", history: list[dict] | None = None,
+                        prior_turns: list[str] | None = None) -> tuple[str, str]:
+    system = TURN_TEMPLATE.format(target=target_name, source_hint=_source_hint(source_name),
+                                  glossary=settings.glossary)
+    convo, _ = _conversation(history or [], [])
+    user = ""
+    if convo:
+        user += "Conversation before this turn (context only):\n" + "\n".join(convo) + "\n\n"
+    prior = [t.strip() for t in (prior_turns or [])[-3:] if t and t.strip()]
+    if prior:
+        user += "Your recent translations (keep terms consistent):\n" + "\n".join(prior) + "\n\n"
+    who = f" -- {speaker}" if speaker else ""
+    user += f"CURRENT TURN{who}:\n" + " ".join(l.strip() for l in lines if l.strip())
+    user += "\n\nTranslation:"
     return system, user
 
 
@@ -105,7 +192,7 @@ class _Cache(OrderedDict):
 
 
 _cache = _Cache()
-stats = {"calls": 0, "cache_hits": 0, "errors": 0, "total_ms": 0.0}
+stats = {"calls": 0, "turn_calls": 0, "cache_hits": 0, "errors": 0, "total_ms": 0.0}
 _stats_lock = threading.Lock()
 
 
@@ -117,7 +204,8 @@ def count(name: str, amount: float = 1) -> None:
 
 def translate(text: str, context: list[str] | None = None,
               provider: str | None = None, target: str | None = None,
-              source: str | None = None) -> dict:
+              source: str | None = None, history: list[dict] | None = None,
+              speaker: str = "") -> dict:
     """`target` is a language code chosen by the reader; it falls back to the
     server default so an older extension keeps working."""
     target_code = target or settings.target_lang
@@ -155,7 +243,8 @@ def translate(text: str, context: list[str] | None = None,
         return {"translation": hit, "cached": True, "ms": 0.0,
                 "provider": provider or settings.provider, "passthrough": False}
 
-    system, user = build_messages(text, context or [], target_name, source_name)
+    system, user = build_messages(text, context or [], target_name, source_name,
+                                  history=history, speaker=speaker)
     out, ms, used = call(system, user, provider)
 
     count("calls")
@@ -163,6 +252,46 @@ def translate(text: str, context: list[str] | None = None,
     _cache.put(key, out)
     return {"translation": out, "cached": False, "ms": round(ms, 1),
             "provider": used, "passthrough": False}
+
+
+def translate_turn(lines: list[str], speaker: str = "", history: list[dict] | None = None,
+                   prior_turns: list[str] | None = None, provider: str | None = None,
+                   target: str | None = None, source: str | None = None) -> dict:
+    """
+    One speaker's turn, retranslated as a whole once they stop.
+
+    Line by line, the translator never sees a sentence whole: Teams cuts captions
+    wherever the speaker paused, and a verb-final language like Persian cannot be
+    written well from half a sentence. Given the whole turn, even a small model
+    joins the fragments into sentences -- this is the single biggest quality step
+    measured (7.6 -> 9.1 on the same model).
+
+    Not cached: a turn is not going to recur word for word.
+    """
+    target_code = target or settings.target_lang
+    target_name = languages.name_of(target_code, settings.target_lang_name)
+    source_name = languages.name_of(source or "", "")
+
+    lines = [l.strip() for l in (lines or []) if l and l.strip()]
+    if not lines:
+        return {"translation": "", "ms": 0.0, "provider": "none", "passthrough": False}
+    if source and languages.get(source) is not None \
+            and languages.get(source) is languages.get(target_code):
+        return {"translation": " ".join(lines), "ms": 0.0, "provider": "none",
+                "passthrough": True}
+
+    # A turn is bounded by the extension, but never trust that blindly.
+    budget, kept = settings.max_chars * 2, []
+    for l in lines:
+        if sum(len(k) for k in kept) + len(l) > budget:
+            break
+        kept.append(l)
+
+    system, user = build_turn_messages(kept or lines[:1], speaker, target_name, source_name,
+                                       history=history, prior_turns=prior_turns)
+    out, ms, used = call(system, user, provider)
+    count("turn_calls")
+    return {"translation": out, "ms": round(ms, 1), "provider": used, "passthrough": False}
 
 
 # ---------------------------------------------------------------------------

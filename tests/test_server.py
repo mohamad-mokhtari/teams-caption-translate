@@ -224,9 +224,70 @@ def test_retry_and_reuse():
     check("  same client", a is b, True)
 
 
+def test_prompt_context():
+    print("Server: the prompt carries speakers and the reader's earlier translations")
+    hist = [{"speaker": "Sarah", "text": f"line {i}", "translation": f"tr {i}"} for i in range(20)]
+    system, user = translate.build_messages("And the queue?", [], "Persian (Farsi)",
+                                            history=hist, speaker="Brett")
+    check("  speaker names in the conversation", "Sarah: line 19" in user, True)
+    check("  only the last 12 lines", ("Sarah: line 7" in user, "Sarah: line 8" in user), (False, True))
+    check("  earlier translations, last 6, in their own block",
+          ("tr 13" in user, "tr 14" in user, "[your" in user), (False, True, False))
+    check("  current caption names its speaker", "CURRENT CAPTION -- Brett:\nAnd the queue?" in user, True)
+    check("  asks to recover misheard words", "MISHEARD" in system, True)
+    check("  keeps the glossary", settings.glossary.split(",")[0] in system, True)
+
+    print("Server: an older extension's bare context still works")
+    _, user = translate.build_messages("Now?", ["first", "second"], "Persian (Farsi)")
+    check("  bare lines used", ("first" in user, "second" in user), (True, True))
+
+
+def test_turn_endpoint():
+    print("Server: a whole turn is translated in one call")
+    seen = []
+    def rec(system, user):
+        seen.append((system, user))
+        return "ترجمه کامل"
+    fake_backend(rec)
+    with TestClient(main.app) as c:
+        r = c.post("/translate-turn", json={
+            "turn": "T3", "speaker": "Amir", "target": "fa",
+            "lines": ["When graceful, we got the graceful shutdown.", "", "The AI did not know."],
+            "history": [{"speaker": "Brett", "text": "What is this MR about?", "translation": "x"}],
+            "prior_turns": ["قبلی"]}).json()
+        check("  translated", r["translation"], "ترجمه کامل")
+        check("  turn id echoed", r["turn"], "T3")
+        check("  one provider call", len(seen), 1)
+        if seen:
+            system, user = seen[0]
+            check("  both lines joined, empty one dropped",
+                  "When graceful, we got the graceful shutdown. The AI did not know." in user, True)
+            check("  conversation before it included", "Brett: What is this MR about?" in user, True)
+            check("  earlier turn translations for consistency", "قبلی" in user, True)
+            check("  told not to add or drop items", "do not leave out any item" in system, True)
+
+        print("Server: a turn in the reader's own language is not translated")
+        seen.clear()
+        r = c.post("/translate-turn", json={"lines": ["hola", "que tal"], "target": "es", "source": "es"}).json()
+        check("  handed back", (r["translation"], r["passthrough"], len(seen)), ("hola que tal", True, 0))
+
+        print("Server: a failed turn comes back as a 200 with the reason")
+        def boom(system, user):
+            raise providers.ProviderError("OpenAI 500: oops")
+        fake_backend(boom)
+        r = c.post("/translate-turn", json={"lines": ["a", "b"], "turn": "T9"})
+        check("  status and error", (r.status_code, r.json()["error"], r.json()["turn"]),
+              (200, "OpenAI 500: oops", "T9"))
+
+        print("Server: /config tells the panel turns are available")
+        check("  turns", c.get("/config").json()["turns"], True)
+
+
 test_requests_overlap()
 test_errors_do_not_break_the_stream()
 test_passthrough_and_cache()
 test_retry_and_reuse()
+test_prompt_context()
+test_turn_endpoint()
 print("\n" + ("ALL PASS" if not fails else f"{len(fails)} FAILED: {fails}"))
 sys.exit(1 if fails else 0)

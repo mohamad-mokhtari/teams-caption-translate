@@ -39,7 +39,9 @@ class Settings(BaseSettings):
     # --- quality knobs ---
     # Previous segments sent as context. Without this, pronouns and continuations
     # lose their referent: "he said that" translates blind.
-    context_segments: int = 3
+    # 12 measured clearly better than 3 on real meetings: misheard terms are only
+    # recoverable when the model can see what the conversation is about.
+    context_segments: int = 12
     # Domain vocabulary that must survive translation intact.
     # Generic default. Put your own product terms in .env — they are
     # deployment-specific, and they do not belong in a shared config default.

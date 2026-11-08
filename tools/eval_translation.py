@@ -452,8 +452,112 @@ def compare(models, turn_model):
     print(json.dumps(rows, indent=1))
 
 
+# ------------------------------------------------------------------ the real app
+
+def run_app(lines, model):
+    """
+    Replay through the app's own code: app.translate's prompt builders, and the
+    extension's turn rules (same speaker; ends on a pause, at 6 lines or 700
+    characters; one-line turns keep their line translation).
+
+    Returns (line translations, what the reader finally sees per line index group).
+    """
+    from app import translate as T   # noqa: E402 -- the code that ships
+    own, ms = {}, []
+    history = []
+    for i, l in enumerate(lines):
+        s, u = T.build_messages(l["en"], [], TARGET, "English", history=history[-12:],
+                                speaker=l["speaker"])
+        own[i], t = chat(model, s, u); ms.append(t)
+        history.append({"speaker": l["speaker"], "text": l["en"], "translation": own[i]})
+
+    # Turns as the extension forms them.
+    app_turns, cur = [], []
+    for i, l in enumerate(lines):
+        if cur:
+            prev = lines[cur[-1]]
+            chars = sum(len(lines[j]["en"]) for j in cur)
+            # The extension keeps a turn open while the speaker's next line is
+            # still being spoken, and closes it after 3 s with nothing new. A
+            # Teams line is itself 4-6 s of speech, so a real 3 s pause shows up
+            # here as a gap of about 9 s between line timestamps.
+            if prev["speaker"] != l["speaker"] or secs(l["t"]) - secs(prev["t"]) > 9 \
+                    or len(cur) >= 6 or chars >= 700:
+                app_turns.append(cur); cur = []
+        cur.append(i)
+    if cur:
+        app_turns.append(cur)
+
+    final, done = {}, []
+    for turn in app_turns:
+        if len(turn) < 2:
+            final[tuple(turn)] = own[turn[0]]; continue
+        hist = [{"speaker": lines[j]["speaker"], "text": lines[j]["en"], "translation": own[j]}
+                for j in range(max(0, turn[0] - 12), turn[0])]
+        s, u = T.build_turn_messages([lines[j]["en"] for j in turn], lines[turn[0]]["speaker"],
+                                     TARGET, "English", history=hist, prior_turns=done[-3:])
+        out, t = chat(model, s, u); ms.append(t)
+        final[tuple(turn)] = out; done.append(out)
+    log(f"    done app {model}")
+    return own, final, ms
+
+
+def app_check(models):
+    """The shipped prompts and turn rules, per model, against what the live app produced."""
+    OUT.mkdir(exist_ok=True)
+    windows = pick_windows()
+    results, latency = [], {}
+    with cf.ThreadPoolExecutor(max_workers=16) as pool:
+        jobs = {(wi, m): pool.submit(run_app, lines, m)
+                for wi, (_, lines) in enumerate(windows) for m in models}
+        got = {k: f.result() for k, f in jobs.items()}
+        usage = {m: dict(v) for m, v in USAGE.items()}
+        judge_jobs = []
+        for wi, (name, lines) in enumerate(windows):
+            turns = turns_of(lines)
+            per_turn = []
+            for k, turn in enumerate(turns):
+                c = {"A (live today)": " ".join(lines[j]["fa"] for j in turn)}
+                for m in models:
+                    own, final, ms = got[(wi, m)]
+                    if k == 0:
+                        latency.setdefault(m, []).extend(ms)
+                    c[f"lines only: {m}"] = " ".join(own[j] for j in turn)
+                    c[f"lines + turns: {m}"] = " ".join(v for key, v in sorted(final.items())
+                                                        if key[0] in turn)
+                per_turn.append(c)
+                judge_jobs.append((wi, k, pool.submit(judge_turn, lines, turns, k, c)))
+            results.append({"name": name, "lines": lines, "turns": turns, "cands": per_turn})
+        for wi, k, f in judge_jobs:
+            scores, notes = f.result()
+            results[wi]["cands"][k] = {"text": results[wi]["cands"][k], "scores": scores, "notes": notes}
+
+    n = sum(len(l) for _, l in windows)
+    rows = []
+    for key in sorted({k for r in results for c in r["cands"] for k in c["text"]}):
+        sc, w = [], []
+        for r in results:
+            for i, c in enumerate(r["cands"]):
+                if key in c["scores"]:
+                    sc.append(c["scores"][key]); w.append(len(" ".join(r["lines"][j]["en"] for j in r["turns"][i])))
+        model = key.split(": ", 1)[1] if ": " in key else ""
+        cost = None
+        if model in usage and model in PRICES and key.startswith("lines + turns"):
+            pin, pout = PRICES[model]
+            cost = round((usage[model]["in"] * pin + usage[model]["out"] * pout) / 1e6 / n * 400, 3)
+        rows.append({"setup": key, "weighted": round(sum(a * b for a, b in zip(sc, w)) / sum(w), 2),
+                     "low": sum(1 for x in sc if x <= 4), "usd_per_hour": cost})
+    rows.sort(key=lambda r: -r["weighted"])
+    (OUT / "app_check.json").write_text(json.dumps({"rows": rows, "results": results, "usage": usage,
+                                                    "latency": {m: sorted(v) for m, v in latency.items()}},
+                                                   ensure_ascii=False, indent=1), encoding="utf-8")
+    print(json.dumps(rows, indent=1))
+
+
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["compare"]:
+    if sys.argv[1:2] == ["app"]:
+        app_check(sys.argv[2:] or ["gpt-5.6-luna", "gpt-6-luna"])
+    elif sys.argv[1:2] == ["compare"]:
         compare(["gpt-4o-mini", "gpt-4.1-mini", "gpt-5.4-nano", "gpt-5.6-luna", "gpt-6-luna",
                  "gpt-5.4-mini", "gpt-6-sol"], turn_model="gpt-6-luna")
     else:

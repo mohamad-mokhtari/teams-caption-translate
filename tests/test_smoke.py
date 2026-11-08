@@ -234,11 +234,12 @@ SERVICE = """
 let detectAnswer = null;          // {lang, name} or null for "und"
 let pinned = true;                // does the deployment configure a language?
 let translatePrefix = "TR:";
+let turnsOn = false;              // does the fake companion offer /translate-turn?
 
 routes["/config"] = () => ({
   target_lang: "fa", target_lang_name: "Persian (Farsi)", rtl: true, script: "arab",
   provider: "openai", context_segments: 3, target_lang_pinned: pinned,
-  transcript_enabled: true, transcript_dir: "/tmp/x",
+  transcript_enabled: true, transcript_dir: "/tmp/x", turns: turnsOn,
   languages: [
     {code:"en", name:"English",         native:"English", script:"latn", rtl:false},
     {code:"fa", name:"Persian (Farsi)", native:"Farsi",   script:"arab", rtl:true},
@@ -1298,8 +1299,124 @@ def test_pop_out():
     check("  and says why", "allow pop-ups" in c.eval('document.querySelector("#mct-meta").textContent'), True)
 
 
+def test_context_carries_speakers_and_translations():
+    """
+    Each line goes out with the conversation before it: who said what, and how
+    this reader was shown it. Bare English lines (the old shape) could not tell
+    "he" from "you", nor keep a term translated the same way twice.
+    """
+    print("Smoke: each line carries who said what before it, and how it was translated")
+    c = boot('detectAnswer = {lang:"en", name:"English"};')
+    c.eval('say("Sarah", "We pushed the fix to the job queue.", "s1")')
+    tick(c, 1500)
+    c.eval('say("Brett", "Did it go into the merge request?", "b1")')
+    tick(c, 1500)
+    sent = json.loads(c.eval("JSON.stringify(calls.filter(x=>x.path==='/translate').map(x=>x.body))"))
+    check("  two lines sent", len(sent), 2)
+    if len(sent) == 2:
+        check("  first line has no history", sent[0]["history"], [])
+        check("  second carries the first, with speaker and translation", sent[1]["history"],
+              [{"speaker": "Sarah", "text": "We pushed the fix to the job queue.",
+                "translation": "TR:We pushed the fix to the job queue."}])
+        check("  and never itself", [h["text"] for h in sent[1]["history"]].count(
+              "Did it go into the merge request?"), 0)
+        check("  older companions still get bare context", sent[1]["context"],
+              ["We pushed the fix to the job queue."])
+
+
+TURNS = """
+turnsOn = true;
+routes["/translate-turn"] = (b) => ({ translation: "TURN:" + b.lines.join(" | "),
+                                      ms: 20, provider: "openai", turn: b.turn });
+"""
+
+
+def turn_calls(c):
+    return json.loads(c.eval("JSON.stringify(calls.filter(x=>x.path==='/translate-turn').map(x=>x.body))"))
+
+
+def test_whole_turn_translation():
+    print("Smoke: a speaker's lines are retranslated as one turn when they stop")
+    c = boot('detectAnswer = {lang:"en", name:"English"};' + TURNS)
+    for i, t in enumerate(["When graceful, we got the graceful shutdown.",
+                           "The AI did not understand our status.",
+                           "So in this merge request we push the queue status."]):
+        c.eval(f'say("Amir", {json.dumps(t)}, "a{i}")')
+        tick(c, 1500)
+    check("  not before they stop", len(turn_calls(c)), 0)
+    tick(c, 3500)
+    got = turn_calls(c)
+    check("  asked once", len(got), 1)
+    if got:
+        check("  with all three lines, in order", got[0]["lines"],
+              ["When graceful, we got the graceful shutdown.",
+               "The AI did not understand our status.",
+               "So in this merge request we push the queue status."])
+        check("  and the speaker", got[0]["speaker"], "Amir")
+    blocks = json.loads(c.eval("""JSON.stringify(document.querySelector("#mct-log").children.map(n =>
+        n.className.includes("mct-turn ") || n.className === "mct-turn" ? "TURN" :
+        n.className.includes("mct-in-turn") ? "line" : "other"))"""))
+    check("  the turn sits directly under its lines", blocks[:4], ["line", "line", "line", "TURN"])
+    check("  showing the whole-turn translation",
+          c.eval('document.querySelector(".mct-turn .mct-turn-tr").textContent').startswith("TURN:"), True)
+
+    print("Smoke: 'line by line' brings the line translations back")
+    c.eval('document.querySelector(".mct-turn-toggle").onclick()')
+    check("  lines shown", c.eval('document.querySelectorAll(".mct-show-lines").length'), 3)
+
+    print("Smoke: the transcript file gets the turn translation once, under its last line")
+    c.eval('click("#mct-save")')
+    pump(c)
+    segs = json.loads(c.eval("JSON.stringify(calls.filter(x=>x.path==='/transcript').flatMap(x=>x.body.segments).filter(s=>s.kind!=='note'))"))
+    check("  three lines written", len(segs), 3)
+    if len(segs) == 3:
+        check("  translation only under the last", [bool(s["translation"]) for s in segs], [False, False, True])
+        check("  and it is the turn's", segs[2]["translation"].startswith("TURN:"), True)
+
+
+def test_turn_boundaries():
+    print("Smoke: someone else speaking ends the turn at once")
+    c = boot('detectAnswer = {lang:"en", name:"English"};' + TURNS)
+    c.eval('say("Amir", "First part of what I wanted to say.", "a0")'); tick(c, 1500)
+    c.eval('say("Amir", "And the second part of it.", "a1")'); tick(c, 1500)
+    c.eval('say("Brett", "OK, makes sense.", "b0")'); tick(c, 1000)
+    got = turn_calls(c)
+    check("  Amir's turn asked for", [g["speaker"] for g in got], ["Amir"])
+
+    print("Smoke: a one-line turn is left alone -- its own translation saw all of it")
+    tick(c, 4000)
+    check("  no request for Brett's single line", [g["speaker"] for g in turn_calls(c)], ["Amir"])
+
+    print("Smoke: a long monologue is refined in pieces as it goes")
+    c2 = boot('detectAnswer = {lang:"en", name:"English"};' + TURNS)
+    for i in range(7):
+        c2.eval(f'say("Brett", "This is sentence number {i} of a long explanation.", "m{i}")')
+        tick(c2, 1500)
+    check("  first six already sent", [len(g["lines"]) for g in turn_calls(c2)], [6])
+
+    print("Smoke: switched off in settings, only lines are translated")
+    c3 = boot('detectAnswer = {lang:"en", name:"English"};' + TURNS)
+    c3.eval('const box = document.querySelector("#mct-refine"); box.checked = false; box.onchange()')
+    c3.eval('say("Amir", "One thing.", "x0")'); tick(c3, 1500)
+    c3.eval('say("Amir", "And another thing.", "x1")'); tick(c3, 5000)
+    check("  no turn request", len(turn_calls(c3)), 0)
+
+    print("Smoke: a companion without the endpoint changes nothing visible")
+    c4 = boot('detectAnswer = {lang:"en", name:"English"}; turnsOn = true;')   # no route
+    c4.eval('say("Amir", "One thing.", "y0")'); tick(c4, 1500)
+    c4.eval('say("Amir", "And another thing.", "y1")'); tick(c4, 5000)
+    check("  line translations stand", [r["tr"] for r in json.loads(rows(c4))],
+          ["TR:One thing.", "TR:And another thing."])
+    check("  no turn block", c4.eval('document.querySelectorAll(".mct-turn").length'), 0)
+    check("  and the companion is not reported offline",
+          "offline" in c4.eval('document.querySelector("#mct-meta").textContent'), False)
+
+
 test_live_line_stays_below_finished_rows()
 test_pop_out()
+test_context_carries_speakers_and_translations()
+test_whole_turn_translation()
+test_turn_boundaries()
 test_speaks_from_outside_the_tab()
 test_read_aloud()
 test_service_down()

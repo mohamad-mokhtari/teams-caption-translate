@@ -6,7 +6,7 @@ they hear it.
 See [DESIGN.md](DESIGN.md) for the architecture and why it reads the DOM instead of
 screenshotting the screen.
 
-**Status: in daily use (extension 1.3.0).** Captions are read from the Teams DOM
+**Status: in daily use (extension 1.4.0).** Captions are read from the Teams DOM
 (verified 2026-08-29) and from Google Meet, translated by a local companion service,
 shown in a panel that can live in the meeting tab or in **its own window on a second
 monitor**, read aloud on request, and written to a Markdown transcript.
@@ -479,6 +479,58 @@ already completed, the whole line is retranslated and the wording can shift. Ful
 removing that means treating each sentence as its own row rather than each Teams
 caption line — a bigger change, worth doing only if you still notice it.
 
+### How good the translation is, and why
+
+Measured on real meetings with [`tools/eval_translation.py`](tools/eval_translation.py):
+120 caption lines from three meetings, replayed as if live through the app's own
+code, each speaker turn scored blind out of 10 (long turns count more).
+
+| Setup | Score | Cost per meeting-hour |
+|---|---|---|
+| Before (gpt-4o-mini, old prompt, 3 lines of context) | 5.6 | ~$0.02 |
+| New prompt and context, line by line only (gpt-6-luna) | 7.1 | ~$0.03 |
+| **New prompt and context + whole-turn translation (gpt-6-luna)** | **8.8** | **~$0.04** |
+| The same with gpt-5.6-luna | 8.6 | ~$0.08 |
+
+Three things do the work:
+
+**1. The model is told the captions are misheard.** Most of the damage was never
+translation: Teams' recogniser hears jargon as ordinary words, and a literal
+translator renders the mishearing. *"graceful shutdown"* became *"tender shutdown"*,
+*"a list"* (heard as *"a in lease"*) became *"a lease"*, *"merge request"* (heard as
+*"marriage request"*) became *"marriage proposal"*. The prompt now says to translate
+what the speaker plausibly **said**, using the conversation and the glossary.
+
+**2. Each line arrives with the conversation before it** — the last 12 lines, with
+who said each, and how this reader was shown them. Names resolve *he* and *you*;
+the earlier translations keep a term rendered the same way all meeting.
+
+**3. Each speaker's turn is translated again as a whole when they stop.** Teams cuts
+captions wherever the speaker paused, and Persian — verb last — cannot be written
+well from half a sentence. Every line still gets its own translation within about a
+second, so nobody waits. When the speaker stops (someone else talks, or three seconds
+of quiet), their lines are translated again together, and that one translation —
+marked **✓ whole turn** — takes the place of the line-by-line ones. **line by line**
+brings those back. A long monologue is done in pieces of up to six lines as it goes.
+The transcript file gets the whole-turn translation, under the turn's last line.
+
+Switch it off under **⚙** if you want fewer requests; it adds about a third.
+
+**Recommended `server/.env`:**
+
+```
+OPENAI_MODEL=gpt-6-luna          # or gpt-5.6-luna: the same quality, twice the price
+GLOSSARY=...                     # your team's jargon AND abbreviations people say: AIE, RE, CSM ...
+```
+
+The glossary matters more than it looks — it is how the model knows *"marriage
+request"* in your meetings means a merge request. Prices are from third-party
+trackers (Nov 2026); check OpenAI's pricing page.
+
+To compare models or prompts yourself, put transcripts in `sample_translate_meeting/`
+(git-ignored — they are real meetings) and run
+`server/.venv/bin/python tools/eval_translation.py app gpt-6-luna gpt-5.6-luna`.
+
 ### Hearing it instead of reading it
 
 **▶** in the header reads each translated row aloud, in your language, using the
@@ -619,7 +671,7 @@ server/.venv/bin/python -m pip install quickjs
 tests/run_all.sh
 ```
 
-318 checks, all offline — nothing calls a provider, so they run without a key.
+363 checks, all offline — nothing calls a provider, so they run without a key.
 
 `test_server.py` covers the companion: requests overlap rather than queueing (four
 lines in flight take one provider call's time, not four), a summary does not hold up

@@ -24,7 +24,8 @@ from . import languages
 from .config import settings
 from .providers import ProviderError
 from .transcript import TranscriptError, append as append_transcript, directory as transcript_dir
-from .translate import count, detect_language, stats, summarize_speaker, translate
+from .translate import (count, detect_language, stats, summarize_speaker, translate,
+                        translate_turn)
 
 app = FastAPI(title="Caption Translator", version="1.0.0")
 
@@ -57,9 +58,21 @@ app.add_middleware(
 )
 
 
+class HistoryItem(BaseModel):
+    """One earlier caption, as the reader saw it."""
+    speaker: str = ""
+    text: str = ""
+    translation: str = ""          # what this reader was shown; empty if none yet
+
+
 class TranslateIn(BaseModel):
     text: str = Field(description="One settled caption segment")
+    # Older extensions: bare English strings. Used only when `history` is absent.
     context: list[str] = Field(default_factory=list, description="Preceding segments")
+    # Current extensions: who said each earlier line, and how it was translated --
+    # names make "he"/"you" resolvable, and the reader's own earlier translations
+    # keep a term rendered the same way all meeting.
+    history: list[HistoryItem] = Field(default_factory=list)
     speaker: str = ""
     provider: str | None = None          # override per request, for A/B testing
     key: str | None = None               # caption line id; echoed back for replacement
@@ -118,6 +131,9 @@ async def config():
         "languages": languages.LANGUAGES,
         "provider": settings.provider,
         "context_segments": settings.context_segments,
+        # Lets the panel know it may ask for whole-turn translations. An older
+        # service has no /translate-turn, and the panel then sticks to lines.
+        "turns": True,
         "transcript_enabled": settings.transcript_enabled,
         # Shown in the panel so people know where their meeting is being written,
         # before a file exists to point at.
@@ -152,7 +168,8 @@ def do_translate(req: TranslateIn):
     """
     t0 = time.perf_counter()
     try:
-        out = translate(req.text, req.context, req.provider, req.target, req.source)
+        out = translate(req.text, req.context, req.provider, req.target, req.source,
+                        history=[h.model_dump() for h in req.history], speaker=req.speaker)
         return TranslateOut(**out, key=req.key)
     except ProviderError as e:
         count("errors")
@@ -162,6 +179,49 @@ def do_translate(req: TranslateIn):
             provider=req.provider or settings.provider,
             key=req.key, error=str(e),
         )
+
+
+class TurnIn(BaseModel):
+    lines: list[str] = Field(default_factory=list,
+                             description="One speaker's consecutive captions, in order")
+    speaker: str = ""
+    history: list[HistoryItem] = Field(default_factory=list,
+                                       description="The conversation before this turn")
+    prior_turns: list[str] = Field(default_factory=list,
+                                   description="This reader's recent turn translations")
+    turn: str | None = None              # the extension's id for the turn; echoed back
+    provider: str | None = None
+    target: str | None = None
+    source: str | None = None
+
+
+class TurnOut(BaseModel):
+    translation: str
+    ms: float
+    provider: str
+    passthrough: bool = False
+    turn: str | None = None
+    error: str | None = None
+
+
+@app.post("/translate-turn", response_model=TurnOut)
+def do_translate_turn(req: TurnIn):
+    """
+    Retranslate a whole speaker turn once the speaker stops.
+
+    The panel shows each line's translation within a second, then replaces the
+    turn's lines with this one: whole sentences instead of fragments cut wherever
+    the speaker paused. Errors come back as a 200 with `error` set, and the panel
+    simply keeps the line-by-line translations.
+    """
+    try:
+        out = translate_turn(req.lines, req.speaker, [h.model_dump() for h in req.history],
+                             req.prior_turns, req.provider, req.target, req.source)
+        return TurnOut(**out, turn=req.turn)
+    except ProviderError as e:
+        count("errors")
+        return TurnOut(translation="", ms=0.0, provider=req.provider or settings.provider,
+                       turn=req.turn, error=str(e))
 
 
 class SummaryIn(BaseModel):
