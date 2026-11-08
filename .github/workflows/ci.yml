@@ -1,5 +1,6 @@
-# Every push: run all the offline tests, then build the Windows app and prove the
-# built .exe starts. A tag like v1.4.0 also publishes a GitHub release with the zip.
+# Every push: run all the offline tests, then build the desktop app for Windows and
+# for Linux and prove each BUILT program starts. A tag like v1.4.0 also publishes a
+# GitHub release with both packages.
 name: CI
 
 on:
@@ -55,4 +56,37 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: desktop/dist/*.zip
+          generate_release_notes: true
+
+  linux-app:
+    needs: tests
+    # 22.04, not latest: a binary runs on systems with the same or NEWER glibc, so
+    # building on the oldest supported base is what makes it run on Ubuntu 22.04+,
+    # Debian 12+, Fedora 36+ alike.
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write          # only used to publish a release on a v* tag
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq xvfb
+          python -m pip install --quiet -r desktop/requirements.txt
+      # Under a virtual screen, so PyInstaller can inspect the tray library and the
+      # self-test can prove its X11 backend made it into the binary.
+      - name: Build, self-test the built program, package
+        run: xvfb-run -a python desktop/build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CaptionTranslator-linux
+          path: desktop/dist/*.tar.gz
+          if-no-files-found: error
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktop/dist/*.tar.gz
           generate_release_notes: true

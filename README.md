@@ -15,7 +15,7 @@ monitor**, read aloud on request, and written to a Markdown transcript.
 |---|---|
 | `extension/` | Edge/Chrome extension: captures captions, renders the panel, speaks |
 | `server/` | FastAPI companion on `127.0.0.1:8100`: translation, language detection, summaries, transcripts |
-| `desktop/` | **Caption Translator for Windows**: the companion as a tray app — no Python, terminal or git |
+| `desktop/` | **Caption Translator** for Windows and Linux: the companion as a tray app — no Python, terminal or git |
 | `console-test.js` | The extension's code, pasteable into DevTools (generated — see below) |
 | `tools/probe.js` | Works out caption markup on a new platform from a live call |
 | `tests/` | Everything offline: `tests/run_all.sh` |
@@ -24,13 +24,22 @@ monitor**, read aloud on request, and written to a Markdown transcript.
 
 ## Getting started
 
-### On Windows: the desktop app (easiest)
+### The desktop app: Windows and Linux (easiest)
 
-1. Download **`CaptionTranslator-<version>-windows.zip`** from the repository's
-   [Releases](https://github.com/mohamad-mokhtari/teams-caption-translate/releases)
-   (or, between releases, from the latest **CI** run's artifacts under *Actions*) and unzip it.
-2. Run **`CaptionTranslator.exe`**. It is not code-signed, so Windows may warn about an
-   unknown publisher: **More info → Run anyway**.
+Download from the repository's
+[Releases](https://github.com/mohamad-mokhtari/teams-caption-translate/releases) —
+or, between releases, from the latest **CI** run under *Actions* (artifacts need you to
+be **signed in to GitHub**; their names are not links otherwise):
+
+| | Download | Run |
+|---|---|---|
+| Windows | `CaptionTranslator-<version>-windows.zip` | unzip, run `CaptionTranslator.exe` |
+| Linux (x86-64) | `CaptionTranslator-<version>-linux-x86_64.tar.gz` | `tar xzf …`, then `./CaptionTranslator` |
+
+1. Unpack it.
+2. Start it. On Windows it is not code-signed yet, so you get **"Windows protected your
+   PC"**: click **More info → Run anyway**. On Linux, if the file manager will not run it,
+   allow executing in its Properties (or `chmod +x CaptionTranslator`).
 3. A settings page opens in your browser. Paste your OpenAI API key, choose the model
    and your language, add your team's jargon to the glossary, press **Save**, then
    **Test** — it translates one sentence so you know the key works.
@@ -38,12 +47,30 @@ monitor**, read aloud on request, and written to a Markdown transcript.
    browser and turn on live captions.
 
 A speech-bubble icon sits next to the clock: **green** translating, **amber** needs a
-key, and its tooltip names the model in use. Right-click it for **Settings**, **Open
-transcripts folder**, **Start with Windows** and **Quit**. Changes made in Settings
-apply from the next caption — no restart.
+key, and its tooltip names the model in use. Changes made in Settings apply from the
+next caption — no restart. You enter the key and glossary **once**; they are kept
+across restarts and new versions.
 
-Settings are kept in `%APPDATA%\CaptionTranslator\settings.env` (same format as
-`server/.env`), and the app's log beside them.
+| | Windows | Linux |
+|---|---|---|
+| Tray icon | click → Settings; right-click → full menu | click → Settings (no menu — see below) |
+| Open transcripts folder, start at login, Quit | tray menu **and** settings page | settings page |
+| Start at login | *Start with Windows* (registry, per user) | *Start when I log in* (`~/.config/autostart`) |
+| Applications menu | — | added on first run, with the icon |
+| Settings file (same format as `server/.env`) | `%APPDATA%\CaptionTranslator\settings.env` | `~/.config/caption-translator/settings.env` |
+| Runs on | Windows 10/11 | glibc 2.35+: Ubuntu 22.04+, Debian 12+, Fedora 36+ … |
+
+**Starting it again opens Settings.** If it is already running, a second start does not
+complain — it opens the running one's settings page. That is the way in on a desktop
+that shows no tray icons at all (GNOME without the *AppIndicator and KStatusNotifierItem
+Support* extension): the app translates regardless, and its settings — Quit included —
+are one more start away.
+
+> **Why the Linux tray has no menu.** The only tray backend that can be bundled into a
+> single Linux binary (X11 system tray) supports a click and nothing else; the one with
+> menus (AppIndicator) needs the system's own GTK libraries, which do not travel inside
+> a binary reliably. So everything the menu does is also on the settings page — on both
+> systems — and the Linux tray click opens it.
 
 > **One translator at a time.** The app and `server\run.bat` both use port 8100, which
 > the extension calls. Close any old `run.bat` window first; the app says so if it finds
@@ -701,7 +728,7 @@ server/.venv/bin/python -m pip install quickjs
 tests/run_all.sh
 ```
 
-413 checks, all offline — nothing calls a provider, so they run without a key.
+428 checks, all offline — nothing calls a provider, so they run without a key.
 
 `test_desktop.py` covers the tray app without needing a screen: the settings file
 (hand edits survive a save), settings applying live, the settings page's lock (token,
@@ -709,7 +736,10 @@ origin, host), the key never reaching the page, and the background server. CI al
 builds the Windows `.exe` on every push and runs it with `--selftest`, because a frozen
 build only fails on a missing module when it runs.
 
-To build the `.exe` yourself on Windows: `desktop\build_windows.bat`.
+CI builds both versions on every push and runs each built program with `--selftest`;
+the Linux build runs under a virtual screen so the self-test also proves the tray
+backend was bundled. To build yourself: `desktop\build_windows.bat` on Windows, or
+`pip install -r desktop/requirements.txt && python desktop/build.py` on Linux.
 
 `test_server.py` covers the companion: requests overlap rather than queueing (four
 lines in flight take one provider call's time, not four), a summary does not hold up

@@ -24,9 +24,10 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from . import APP_NAME, PORT, __version__, autostart, store
 
 
-def mount(app: FastAPI, token: str) -> None:
+def mount(app: FastAPI, token: str, on_quit=None) -> None:
     """Add the settings routes to the server app. Safe to call more than once."""
     app.state.settings_token = token
+    app.state.on_quit = on_quit
     if getattr(app.state, "settings_mounted", False):
         return
     app.state.settings_mounted = True
@@ -59,7 +60,8 @@ def _data() -> dict:
         "languages": [{"code": l["code"], "name": l["name"], "native": l.get("native", "")}
                       for l in languages.LANGUAGES],
         "openai_models": [{"id": i, "label": t} for i, t in store.OPENAI_MODELS],
-        "autostart": {"supported": autostart.supported(), "enabled": autostart.is_enabled()},
+        "autostart": {"supported": autostart.supported(), "enabled": autostart.is_enabled(),
+                      "label": autostart.label()},
         "version": __version__,
         "settings_file": str(store.settings_path()),
         "transcript_dir_resolved": str(directory()),
@@ -96,10 +98,39 @@ async def settings_save(req: Request):
     store.apply(values)
     if "autostart" in body and autostart.supported():
         try:
-            autostart.set_enabled(bool(body["autostart"]))
+            from . import icon
+            autostart.set_enabled(bool(body["autostart"]), icon.ensure_png(store.data_dir()))
         except OSError as e:
-            return JSONResponse({"error": f"saved, but Start with Windows failed: {e}"}, status_code=500)
+            return JSONResponse({"error": f"saved, but {autostart.label()} failed: {e}"}, status_code=500)
     return _data()
+
+
+@router.post("/settings/open-transcripts")
+def open_transcripts(req: Request):
+    """The tray menu's "Open transcripts folder", for systems whose tray has no menu."""
+    bad = _refuse(req)
+    if bad is not None:
+        return bad
+    from . import platform_open
+    from app.transcript import directory
+    path = directory()
+    path.mkdir(parents=True, exist_ok=True)
+    platform_open.folder(path)
+    return {"ok": True, "path": str(path)}
+
+
+@router.post("/settings/quit")
+def quit_app(req: Request):
+    """The tray menu's Quit, for systems whose tray has no menu (or no tray at all)."""
+    bad = _refuse(req)
+    if bad is not None:
+        return bad
+    cb = getattr(req.app.state, "on_quit", None)
+    if cb is None:
+        return JSONResponse({"error": "quit is not available here"}, status_code=400)
+    import threading
+    threading.Timer(0.3, cb).start()        # let this response go out first
+    return {"ok": True}
 
 
 @router.post("/settings/test")
@@ -250,10 +281,15 @@ _PAGE = r"""<!doctype html>
     <div class="hint" id="tdir"></div>
   </section>
 
-  <section id="startup">
-    <h2>Startup</h2>
-    <div class="check"><input type="checkbox" id="autostart">
-      <span>Start with Windows<small>Runs in the tray when you sign in, so the panel always has a translator.</small></span></div>
+  <section id="appsec">
+    <h2>App</h2>
+    <div class="check" id="startup"><input type="checkbox" id="autostart">
+      <span id="autostart-label">Start when I log in<small>Runs in the background from sign-in, so the panel always has a translator.</small></span></div>
+    <div class="row" style="margin-top:12px">
+      <div style="flex:0 0 auto"><button id="open-tdir" type="button">Open transcripts folder</button></div>
+      <div style="flex:0 0 auto"><button id="quit" type="button">Quit Caption Translator</button></div>
+    </div>
+    <div class="hint">The same as the tray icon's menu. Quit stops translating until you start the app again.</div>
   </section>
 
   <div class="hint" id="file"></div>
@@ -306,6 +342,7 @@ function fill(d) {
 
   $("startup").style.display = d.autostart.supported ? "" : "none";
   $("autostart").checked = d.autostart.enabled;
+  $("autostart-label").firstChild.textContent = d.autostart.label;
   $("file").textContent = "Settings file: " + d.settings_file;
 
   const p = v.provider;
@@ -375,6 +412,23 @@ $("test").onclick = async () => {
     } else { out.className = "err"; out.textContent = d.error || "Failed"; status(""); }
   } catch (e) { out.className = "err"; out.textContent = "Could not reach the translator."; status(""); }
   finally { $("test").disabled = false; }
+};
+
+$("open-tdir").onclick = async () => {
+  const r = await fetch("/settings/open-transcripts", { method: "POST", headers: H });
+  const d = await r.json().catch(() => ({}));
+  status(r.ok ? "Opened " + d.path : (d.error || "Could not open the folder"), r.ok ? "ok" : "err");
+};
+
+$("quit").onclick = async () => {
+  if (!confirm("Quit Caption Translator? Captions will not be translated until you start it again.")) return;
+  const r = await fetch("/settings/quit", { method: "POST", headers: H }).catch(() => null);
+  if (r && r.ok) {
+    document.querySelector("main").innerHTML = "";
+    const h = document.createElement("h2"); h.textContent = "Caption Translator has quit.";
+    const p = document.createElement("p"); p.className = "hint"; p.textContent = "Start it again to resume translating. You can close this tab.";
+    document.querySelector("main").append(h, p);
+  } else status("Could not quit from here — use the tray icon.", "err");
 };
 
 load();

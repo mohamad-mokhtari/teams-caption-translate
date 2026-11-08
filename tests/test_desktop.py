@@ -17,6 +17,7 @@ import tempfile
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 TMP = pathlib.Path(tempfile.mkdtemp(prefix="mct-desktop-"))
 os.environ["XDG_CONFIG_HOME"] = str(TMP)          # settings go here, never the real profile
+os.environ["XDG_DATA_HOME"] = str(TMP / "share")  # and menu entries here
 os.environ.pop("APPDATA", None)
 sys.path[:0] = [str(ROOT / "desktop"), str(ROOT / "server")]
 
@@ -25,7 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import main as server_main, providers, translate  # noqa: E402
 from app.config import settings  # noqa: E402
-from caption_translator import __version__, autostart, icon, settings_page, store  # noqa: E402
+from caption_translator import __version__, autostart, icon, platform_open, settings_page, store  # noqa: E402
 from caption_translator.main import selftest  # noqa: E402
 from caption_translator.server import ServerThread, ours_is_running, port_in_use  # noqa: E402
 
@@ -148,6 +149,19 @@ def test_settings_page():
     providers._BACKENDS["openai"] = boom
     check("  and says why when it does not", c.post("/settings/test", headers=H).json()["error"],
           "OpenAI 401: invalid key")
+    print("Desktop: the tray menu's actions are on the page too (Linux trays have no menu)")
+    quits, opened = [], []
+    settings_page.mount(server_main.app, "tok-123", on_quit=lambda: quits.append(1))
+    platform_open.folder = lambda path: opened.append(str(path))
+    r = c.post("/settings/open-transcripts", headers=H).json()
+    check("  opens the transcripts folder", opened == [r["path"]], True)
+    check("  quit needs the token", c.post("/settings/quit").status_code, 403)
+    check("  quit", c.post("/settings/quit", headers=H).json(), {"ok": True})
+    import time
+    time.sleep(0.6)                           # it lets the response go out first
+    check("  and the app is told to stop", quits, [1])
+    check("  start-at-login named for the system",
+          c.get("/settings/data", headers=H).json()["autostart"]["label"], autostart.label())
     restore()
 
 
@@ -159,15 +173,41 @@ def test_setup_and_autostart():
     check("  local model: no key needed", store.needs_setup(), False)
     restore()
 
-    print("Desktop: Start with Windows only where there is a Windows")
-    check("  supported here", autostart.supported(), sys.platform == "win32")
-    if not autostart.supported():
-        check("  reports off", autostart.is_enabled(), False)
-        try:
-            autostart.set_enabled(True); check("  refuses", False, True)
-        except RuntimeError:
-            check("  refuses rather than pretending", True, True)
+    print("Desktop: start at login, on Windows and Linux")
+    check("  supported here", autostart.supported(), sys.platform == "win32" or sys.platform.startswith("linux"))
+    check("  labelled for the system", autostart.label(),
+          "Start with Windows" if sys.platform == "win32" else "Start when I log in")
     check("  starts in the background at sign-in", autostart.command().endswith("--background"), True)
+    check("  from source: the script by absolute path, not -m (no working directory at login)",
+          "run_app.py" in autostart.command(), True)
+    if sys.platform.startswith("linux"):
+        png = icon.ensure_png(store.data_dir())
+        check("  off to begin with", autostart.is_enabled(), False)
+        autostart.set_enabled(True, png)
+        f = autostart.autostart_file()
+        text = f.read_text()
+        check("  XDG autostart entry written", f.parent.name == "autostart" and f.exists(), True)
+        check("  runs in the background, with the icon",
+              ("--background" in text, f"Icon={png}" in text), (True, True))
+        check("  reported on", autostart.is_enabled(), True)
+        autostart.set_enabled(False)
+        check("  and off again: the file is the whole undo", f.exists(), False)
+
+        print("Desktop: Linux gets an applications-menu entry that follows the binary")
+        m = autostart.install_menu_entry(png)
+        check("  written", m.exists() and "Exec=" in m.read_text(), True)
+        before = m.read_text()
+        m.write_text(before.replace("run_app.py", "moved/run_app.py"))
+        autostart.install_menu_entry(png)
+        check("  rewritten when the binary has moved", m.read_text(), before)
+
+    print("Desktop: a second start can find the running one, and nobody else can")
+    store.write_instance(8100, "tok-xyz")
+    check("  read back", store.read_instance()["token"], "tok-xyz")
+    if os.name == "posix":
+        check("  readable only by this user", oct(store.instance_path().stat().st_mode & 0o777), "0o600")
+    store.clear_instance()
+    check("  removed on quit", store.read_instance(), None)
 
     print("Desktop: the icon, in every state")
     check("  sizes", [icon.draw(n).size for n in (16, 32, 64)], [(16, 16), (32, 32), (64, 64)])

@@ -63,6 +63,44 @@ def log_path() -> pathlib.Path:
     return data_dir() / "caption-translator.log"
 
 
+def instance_path() -> pathlib.Path:
+    return data_dir() / "instance.json"
+
+
+def write_instance(port: int, token: str) -> None:
+    """
+    How a second start finds the running app: its port and settings token.
+
+    Readable only by this user (0600 on Linux; %APPDATA% is per-user on
+    Windows). A website cannot read files, so the token stays out of its reach.
+    """
+    import json
+    path = instance_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump({"port": port, "token": token, "pid": os.getpid()}, f)
+    try:
+        os.chmod(path, 0o600)       # in case it already existed with wider permissions
+    except OSError:
+        pass
+
+
+def read_instance() -> dict | None:
+    import json
+    try:
+        return json.loads(instance_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def clear_instance() -> None:
+    try:
+        instance_path().unlink()
+    except OSError:
+        pass
+
+
 def read(path: pathlib.Path) -> dict[str, str]:
     """KEY=value lines -> {key_lowercase: value}. Comments and blanks ignored."""
     out: dict[str, str] = {}

@@ -46,6 +46,16 @@ def draw(size: int = 64, state: str = "ok"):
     return img.resize((size, size), Image.LANCZOS)
 
 
+def ensure_png(directory) -> str:
+    """A 256px PNG for Linux menus and autostart entries; written once."""
+    import pathlib
+    path = pathlib.Path(directory) / "icon.png"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        draw(256).save(path)
+    return str(path)
+
+
 def write_ico(path: str) -> None:
     sizes = [16, 24, 32, 48, 64, 128, 256]
     draw(256).save(path, format="ICO", sizes=[(n, n) for n in sizes])

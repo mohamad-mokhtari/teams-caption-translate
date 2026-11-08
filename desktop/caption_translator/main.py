@@ -48,11 +48,14 @@ def _paths_first() -> None:
 
 
 def _message(text: str) -> None:
-    """A plain dialog when there is no tray to speak through yet."""
+    """A plain dialog (Windows) or notification (Linux) when there is no tray yet."""
     logging.warning(text)
     if sys.platform == "win32":
         import ctypes
         ctypes.windll.user32.MessageBoxW(None, text, "Caption Translator", 0x40)
+    else:
+        from . import platform_open
+        platform_open.notify("Caption Translator", text)
 
 
 def selftest(port: int) -> int:
@@ -76,6 +79,21 @@ def selftest(port: int) -> int:
             "settings locked": httpx.get(f"{base}/settings/data", timeout=5).status_code == 403,
             "icon": icon.draw(32).size == (32, 32),
         }
+        # The tray library loads its backend by name at runtime -- exactly what a
+        # frozen build loses without noticing. Checked wherever there is a screen
+        # (always on Windows; on Linux under a display, e.g. Xvfb in CI).
+        if sys.platform == "win32" or os.environ.get("DISPLAY"):
+            try:
+                import pystray
+                backend = pystray.Icon.__module__
+                print(f"SELFTEST info tray backend: {backend}")
+                checks["tray backend"] = backend in ("pystray._win32", "pystray._xorg",
+                                                     "pystray._appindicator", "pystray._gtk")
+            except Exception as e:                     # noqa: BLE001 -- report, do not crash
+                print(f"SELFTEST info tray backend failed to load: {e!r}")
+                checks["tray backend"] = False
+        else:
+            print("SELFTEST skip tray backend (no display)")
         for name, ok in checks.items():
             print(f"SELFTEST {'ok  ' if ok else 'FAIL'} {name}")
         return 0 if all(checks.values()) else 1
@@ -87,39 +105,97 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     _paths_first()
 
-    from . import PORT, store
+    import threading
+    import webbrowser
+
+    from . import PORT, autostart, icon, platform_open, store
     from .server import ServerThread, ours_is_running, port_in_use
 
     if "--selftest" in argv:
         port = int(os.environ.get("MCT_SELFTEST_PORT", "8199"))
         return selftest(port)
 
-    # One copy at a time: the extension can only talk to one translator.
+    # One copy at a time: the extension can only talk to one translator. Starting
+    # it again is how a person finds its settings when there is no tray menu --
+    # so a second start opens the running one's settings rather than complaining.
     if port_in_use(PORT):
         if ours_is_running(PORT):
-            _message("Caption Translator is already running — look for its icon next to the clock.")
+            inst = store.read_instance()
+            if inst and inst.get("token"):
+                webbrowser.open(f"http://127.0.0.1:{PORT}/settings?token={inst['token']}")
+                return 0
+            _message("Caption Translator is already running \u2014 look for its icon next to the clock.")
         else:
             _message(f"Something else is using port {PORT}, which the browser extension needs. "
-                     f"Close it (an old server\\run.bat window?) and start Caption Translator again.")
+                     f"Close it (an old server/run.sh or run.bat window?) and start Caption Translator again.")
         return 1
 
     token = secrets.token_urlsafe(24)
-    srv = ServerThread(PORT, token)
+    done = threading.Event()
+    holder: dict = {}
+
+    def stop_server():
+        srv.stop()
+        store.clear_instance()
+        done.set()
+
+    def quit_all():                        # from the settings page's Quit
+        tray_ = holder.get("tray")
+        if tray_ is not None:
+            tray_.quit()                   # stops the icon, then stop_server
+        else:
+            stop_server()
+
+    srv = ServerThread(PORT, token, on_quit=quit_all)
     if not srv.start():
         _message(f"The translator could not start. Details are in {store.log_path()}")
         return 1
+    store.write_instance(PORT, token)
     logging.info("translator running on 127.0.0.1:%s, settings in %s", PORT, store.settings_path())
 
-    from .tray import Tray
-    tray = Tray(token, on_quit=srv.stop)
+    png = icon.ensure_png(store.data_dir())
+    autostart.install_menu_entry(png)      # Linux: in the applications menu, where the binary is now
+    if autostart.is_enabled():
+        try:
+            autostart.set_enabled(True, png)   # follow the binary if it was moved
+        except OSError:
+            pass
+    settings_url = f"http://127.0.0.1:{PORT}/settings?token={token}"
+
+    try:
+        from .tray import Tray
+        tray = Tray(token, on_quit=stop_server)
+        holder["tray"] = tray
+    except Exception as e:                 # no display, no tray support: keep translating anyway
+        logging.warning("no tray icon available: %s", e)
+        tray = None
 
     def first_moments():
         if store.needs_setup():
-            tray.open_settings()                # first run: straight to where the key goes
+            webbrowser.open(settings_url)  # first run: straight to where the key goes
         elif "--background" not in argv:
-            tray.notify("Translating in the background. Right-click the icon for settings.")
+            how = ("Right-click the icon for settings." if tray.has_menu else
+                   "Click the icon for settings \u2014 or start Caption Translator again.")
+            tray.notify(f"Translating in the background. {how}")
 
-    tray.run(first_moments)
+    if tray is not None:
+        try:
+            tray.run(first_moments)        # blocks until Quit
+            return 0
+        except Exception as e:
+            logging.warning("tray icon failed: %s", e)
+            holder.pop("tray", None)
+
+    # No tray. The translator runs regardless; Settings (with Quit) is one more
+    # start of the app away, and is opened now unless this is a sign-in start.
+    if "--background" not in argv or store.needs_setup():
+        webbrowser.open(settings_url)
+    platform_open.notify("Caption Translator", "Translating in the background. Start Caption "
+                         "Translator again any time to open its settings.", png)
+    try:
+        done.wait()
+    except KeyboardInterrupt:
+        stop_server()
     return 0
 
 

@@ -30,14 +30,14 @@ def ours_is_running(port: int) -> bool:
 
 
 class ServerThread:
-    def __init__(self, port: int, token: str):
+    def __init__(self, port: int, token: str, on_quit=None):
         import uvicorn
 
         from app.main import app
 
         from .settings_page import mount
 
-        mount(app, token)
+        mount(app, token, on_quit)
         # log_config=None: uvicorn's default logging writes to a console that a
         # windowed .exe does not have. Logging goes where main.py sends it.
         self._server = uvicorn.Server(uvicorn.Config(

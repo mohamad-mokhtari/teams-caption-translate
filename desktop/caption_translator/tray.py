@@ -4,16 +4,19 @@ The tray icon and its menu. The only part of the app a person sees day to day.
 Left-click opens the settings. The icon's colour says the state at a glance --
 green translating, amber needs a key, red not running -- and the tooltip says it
 in words.
+
+Windows has the full menu. On Linux the backend that can be bundled into one
+file (X11 system tray) supports a click and nothing else -- no menu, no
+notifications -- so a click opens Settings, every menu item is ALSO on the
+settings page, and notifications go through notify-send. Run from source on a
+desktop with AppIndicator, the menu appears there too.
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import threading
 import webbrowser
 
-from . import APP_NAME, PORT, __version__, autostart, icon, store
+from . import APP_NAME, PORT, __version__, autostart, icon, platform_open, store
 
 
 class Tray:
@@ -29,7 +32,7 @@ class Tray:
                 pystray.MenuItem("Settings…", lambda: self.open_settings(), default=True),
                 pystray.MenuItem("Open transcripts folder", lambda: self.open_transcripts()),
                 pystray.Menu.SEPARATOR,
-                pystray.MenuItem("Start with Windows", lambda: self._toggle_autostart(),
+                pystray.MenuItem(autostart.label(), lambda: self._toggle_autostart(),
                                  checked=lambda _: autostart.is_enabled(),
                                  visible=autostart.supported()),
                 pystray.MenuItem(lambda _: self._status_line(), None, enabled=False),
@@ -37,6 +40,8 @@ class Tray:
                 pystray.MenuItem("Quit", lambda: self.quit()),
             ))
         self._refresh_timer = None
+        # Does this system's tray have a menu? If not, the settings page has it all.
+        self.has_menu = bool(getattr(self.icon, "HAS_MENU", True))
 
     # -- state ------------------------------------------------------------
     def _state(self) -> str:
@@ -73,20 +78,20 @@ class Tray:
         from app.transcript import directory
         path = directory()
         path.mkdir(parents=True, exist_ok=True)
-        if sys.platform == "win32":
-            os.startfile(path)                 # noqa: S606 -- a folder in the user's own profile
-        else:
-            subprocess.Popen(["xdg-open", str(path)])
+        platform_open.folder(path)
 
     def _toggle_autostart(self) -> None:
-        autostart.set_enabled(not autostart.is_enabled())
+        autostart.set_enabled(not autostart.is_enabled(), icon.ensure_png(store.data_dir()))
         self.icon.update_menu()
 
     def notify(self, message: str) -> None:
-        try:
-            self.icon.notify(message, APP_NAME)
-        except Exception:
-            pass
+        if getattr(self.icon, "HAS_NOTIFICATION", False):
+            try:
+                self.icon.notify(message, APP_NAME)
+                return
+            except Exception:
+                pass
+        platform_open.notify(APP_NAME, message, icon.ensure_png(store.data_dir()))
 
     def quit(self) -> None:
         if self._refresh_timer:
